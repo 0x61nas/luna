@@ -583,6 +583,9 @@ struct LunaBrowser: QMainWindow {
     }
 
     void show() {
+        LUNA_LOG("frameless: {}", this->opts.frameless);
+        this->tabs->tabBar()->setVisible(!this->opts.frameless);
+        this->status_bar->setVisible(!this->opts.frameless);
         // Create the default tab
         const auto *web_view = this->new_tab(this->profile.web_engine_profile); 
         QMainWindow::show();
