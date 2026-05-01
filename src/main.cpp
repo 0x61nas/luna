@@ -593,6 +593,8 @@ struct LunaBrowser: QMainWindow {
             for (std::string& url: this->opts.urls) {
                 const auto *web_view = this->new_tab(this->profile.web_engine_profile, url.c_str()); 
             }
+            this->opts.urls.clear(); // we are not gonna use any value of this vector after this point.
+            this->opts.urls.shrink_to_fit();
         }
         QMainWindow::show();
     }
