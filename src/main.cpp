@@ -461,10 +461,66 @@ static void register_luna_scheme() {
 
 struct LunaBrowserHistory {
     std::filesystem::path file_path;
+    std::vector<char*> entries;
+    unsigned int new_start = 0;
 
     LunaBrowserHistory() = default;
     LunaBrowserHistory(const std::filesystem::path history_file_path) {
         this->file_path = history_file_path;
+    }
+
+    void load() {
+        const auto capacity = 4096;
+        if (std::filesystem::exists(this->file_path)) {
+            const auto file_size = std::filesystem::file_size(this->file_path);
+            if (file_size > capacity ) this->entries.reserve(file_size / 2);
+            else this->entries.reserve(capacity);
+            auto *file = fopen(this->file_path.c_str(), "r");
+            if (!file) {
+                LUNA_LOG("Cant open {} to load the history, please check your permissions", this->file_path.c_str());
+                return;
+            }
+            const auto& entries = &this->entries;
+            char* buf = nullptr;
+            size_t n = 0;
+            while (getline(&buf, &n, file) != -1) {
+                entries->emplace_back(buf);
+                buf = nullptr;
+                n = 0;
+            }
+            fclose(file);
+            this->new_start = entries->size();
+        } else {
+            const auto parent_path = this->file_path.parent_path();
+            if (!std::filesystem::exists(parent_path)) {
+                if (!std::filesystem::create_directories(parent_path)) LUNA_FAIL("The history file can't be created at `{}`, please cheack your permissions", parent_path.c_str());
+            }
+            this->entries.reserve(capacity);
+        }
+    }
+
+    bool save() {
+        auto *file = fopen(this->file_path.c_str(), "a");
+        if (!file) {
+            LUNA_LOG("Cant open {} to update the history, please check your permissions", this->file_path.c_str());
+            return false;
+        }
+        const auto entries_size = this->entries.size();
+        for (unsigned int i = this->new_start;
+                i < entries_size; i++) {
+            std::fprintf(file, "%s\n", this->entries[i]);
+        }
+        fclose(file);
+        this->new_start = entries_size;
+        return true;
+    }
+
+    void append(const QUrl url) {
+        auto byte_arr = url.toEncoded();
+        auto str = byte_arr.toStdString();
+        char* p = new char[str.size() + 1];
+        std::memcpy(p, str.c_str(), str.size() + 1);
+        this->entries.emplace_back(p);
     }
 };
 
@@ -582,6 +638,10 @@ struct LunaBrowser: QMainWindow {
         // Keep smiling ^_^
     }
 
+    void prepare() {
+        this->profile.history.load();
+    }
+
     void show() {
         LUNA_LOG("frameless: {}", this->opts.frameless);
         this->tabs->tabBar()->setVisible(!this->opts.frameless);
@@ -644,6 +704,9 @@ struct LunaBrowser: QMainWindow {
                     // TODO(anas): In a tab of the same window, without hiding the currently visible web engine view.
                 } break;
             }
+        });
+        QObject::connect(web_engine_view, &QWebEngineView::urlChanged, this, [this](const QUrl u) {
+            if (u.scheme() != LUNA_PREFEX) this->profile.history.append(u);
         });
         // update the status bar when the tab finshes loading
         QObject::connect(web_engine_view, &QWebEngineView::loadFinished, this, [&]() {
@@ -790,6 +853,13 @@ struct LunaBrowser: QMainWindow {
         return QObject::eventFilter(obj, event);
     }
 
+    void closeEvent(QCloseEvent *e) override { 
+        // flush the new entries in our history
+        if (!this->opts.private_window) {
+            this->profile.history.save();
+        }
+    }
+
     void on_focus() {
         // update the status bar
         {
@@ -851,6 +921,8 @@ int main(int argc, char *argv[]) {
     QApplication app(argc, argv);  // MUST be first Qt thing
     // LunaProfile profile;
     LunaBrowserOptions opts;
+    opts.commands.reserve(argc - 1); // you have to be ready for the worst
+    opts.urls.reserve(argc - 1); // we will free it immediately  after using it anyway
     char* profile_name = const_cast<char*>("default");
     // Frist of the firstest process the command line arguments.
     const auto bin = argv[0];
@@ -1030,6 +1102,7 @@ int main(int argc, char *argv[]) {
     LunaBrowserProfile profile(path, profile_name);
     LunaBrowser browser(opts, profile);
     app.installEventFilter(&browser);
+    browser.prepare();
     browser.show();
 
     return app.exec();
