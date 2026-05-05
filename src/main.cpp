@@ -1,3 +1,4 @@
+// things...
 #include <QApplication>
 #include <QMainWindow>
 #include <QLineEdit>
@@ -18,11 +19,19 @@
 #include <QWebEngineUrlScheme>
 #include <QWebEngineUrlRequestJob>
 #include <QWebEngineSettings>
+#include <QWebEngineUrlRequestInterceptor>
+#include <QWebEngineUrlRequestInfo>
 #include <QBuffer>
 #include <print>
 #include <string>
 #include <cstdlib>
 #include <filesystem>
+#include <string_view>
+#include <curl/curl.h>
+#include <fstream>
+#include <unordered_map>
+#include <regex>
+#include <memory>
 
 #define LUNA_FAIL(fmt, ...) \
     do { \
@@ -46,6 +55,7 @@ const char* LUNA_NEW_TAB_PAGE_PATH = "newtab.html";
 
 // globals :3
 char* new_tab_raw;
+unsigned long total_blocked_ads = 0;
 
 #if defined(_WIN32)
 #define PATH_SEP '\\'
@@ -122,6 +132,65 @@ const char* get_app_cache_base() {
     }
 #endif
     return path.c_str();
+}
+
+static uint64_t str2u64(std::string_view s) {
+    uint64_t result = 0;
+    for (char c : s) {
+        if (c >= '0' && c <= '9') {
+            result = result * 10 + (c - '0');
+        } else if (result > 0) {
+            break;
+        }
+    }
+    return result;
+}
+
+inline bool is_separator(char c) {
+    return !std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_' && c != '.' && c != '%';
+}
+
+bool glob_match(std::string_view text, std::string_view pattern) {
+    size_t t = 0, p = 0;
+    size_t star_t = text.length(), star_p = pattern.length();
+    
+    while (t < text.length()) {
+        if (p < pattern.length() && pattern[p] == '*') {
+            star_p = p++;
+            star_t = t;
+        } else if (p < pattern.length() && pattern[p] == '^') {
+            if (is_separator(text[t])) {
+                t++; p++;
+                continue;
+            } else if (star_p != pattern.length()) {
+                p = star_p + 1;
+                t = ++star_t;
+                continue;
+            } else {
+                return false;
+            }
+        } else if (p < pattern.length() && text[t] == pattern[p]) {
+            t++; p++;
+        } else if (star_p != pattern.length()) {
+            p = star_p + 1;
+            t = ++star_t;
+        } else {
+            return false;
+        }
+    }
+    
+    while (p < pattern.length()) {
+        if (pattern[p] == '*') p++;
+        else if (pattern[p] == '^' && t == text.length()) p++;
+        else break;
+    }
+    return p == pattern.length();
+}
+
+static size_t curl_write_cb(void* ptr, size_t size, size_t nmemb, void* userdata) {
+    std::string* out = static_cast<std::string*>(userdata);
+    out->append(static_cast<char*>(ptr), size * nmemb);
+    return size * nmemb;
 }
 
 typedef enum {
@@ -425,6 +494,767 @@ static QWebEngineScript makeFModeScript() {
     return s;
 }
 
+typedef enum {
+    NetworkBlockRule,
+    NetworkExceptionRule,
+    ContentHideRule,
+} LunaAdBlockerRuleType;
+
+struct LunaAdBlockerRuleOptions {
+    uint32_t resource_mask = 0;
+    std::vector<std::string> domains;
+    std::vector<std::string> exclude_domains;
+    std::vector<std::string> from_domains;
+    std::vector<std::string> to_domains;
+    bool third_party = false;
+    bool not_third_party = false;
+    bool match_case = false;
+    bool domain_anchor = false;
+};
+
+struct LunaAdBlockerRule {
+    LunaAdBlockerRuleType type;
+    std::string pattern;
+    std::string selector;
+    bool exact_start = false;
+    bool exact_end = false;
+    bool domain_anchor = false;
+    bool is_regex = false;
+    std::unique_ptr<std::regex> regex_pattern;
+    LunaAdBlockerRuleOptions options;
+
+    static LunaAdBlockerRule parse(std::string_view line) {
+        LunaAdBlockerRule rule{};
+        rule.type = LunaAdBlockerRuleType::NetworkBlockRule;
+
+        size_t i = 0;
+        const size_t n = line.size();
+
+        // @@ exception
+        if (n >= 2 && line[0] == '@' && line[1] == '@') {
+            rule.type = LunaAdBlockerRuleType::NetworkExceptionRule;
+            i += 2;
+        }
+
+        // scan once
+        size_t content_pos = std::string_view::npos;
+        size_t options_pos = std::string_view::npos;
+
+        for (size_t j = i; j < n; ++j) {
+            if (j + 1 < n && line[j] == '#' && line[j + 1] == '#') {
+                content_pos = j;
+                break;
+            }
+            if (line[j] == '$') {
+                options_pos = j;
+                break;
+            }
+        }
+
+        // content rule
+        if (content_pos != std::string_view::npos) {
+            rule.type = LunaAdBlockerRuleType::ContentHideRule;
+            rule.pattern = std::string(line.substr(i, content_pos - i));
+            rule.selector = std::string(line.substr(content_pos + 2));
+            return rule;
+        }
+
+        size_t end = (options_pos != std::string_view::npos) ? options_pos : n;
+
+        if (options_pos != std::string_view::npos) {
+            auto opts = line.substr(options_pos + 1);
+            parse_options(opts, rule.options);
+        }
+
+        // Check if it's a regex rule (starts with /)
+        if (i < end && line[i] == '/') {
+            // Find the closing / (not the options delimiter after $)
+            size_t regex_end = std::string_view::npos;
+            // Search for the closing / of the regex pattern
+            for (size_t j = i + 1; j < end; ++j) {
+                if (line[j] == '/') {
+                    regex_end = j;
+                    break;
+                }
+                // Handle escaped characters in regex
+                if (line[j] == '\\' && j + 1 < end) {
+                    ++j;  // skip next char
+                }
+            }
+            if (regex_end != std::string_view::npos && regex_end > i) {
+                rule.is_regex = true;
+                std::string regex_str(line.substr(i + 1, regex_end - i - 1));
+                // Handle regex flags - options are parsed separately after $
+                std::regex::flag_type flags = std::regex::ECMAScript;
+                if (!rule.options.match_case) {
+                    flags |= std::regex::icase;
+                }
+                try {
+                    rule.regex_pattern = std::make_unique<std::regex>(regex_str, flags);
+                } catch (const std::regex_error& e) {
+                    // Invalid regex, treat as normal pattern
+                    rule.is_regex = false;
+                }
+                return rule;
+            }
+        }
+
+        // anchors
+        if (end - i >= 2 && line[i] == '|' && line[i + 1] == '|') {
+            rule.domain_anchor = true;
+            i += 2;
+        } else if (i < end && line[i] == '|') {
+            rule.exact_start = true;
+            ++i;
+        }
+
+        if (end > i && line[end - 1] == '|') {
+            rule.exact_end = true;
+            --end;
+        }
+
+        // pattern
+        std::string normalized(line.substr(i, end - i));
+
+        if (!rule.exact_end)
+            normalized += '*';
+
+        if (!rule.exact_start && !rule.domain_anchor)
+            normalized = "*" + normalized;
+
+        rule.pattern = std::move(normalized);
+        return rule;
+    }
+
+    static void parse_options(std::string_view opts, LunaAdBlockerRuleOptions& options) {
+        size_t i = 0;
+        while (i < opts.size()) {
+            size_t j = i;
+            while (j < opts.size() && opts[j] != ',') ++j;
+
+            std::string_view tok = opts.substr(i, j - i);
+            
+            // Check for key=value patterns
+            size_t eq_pos = tok.find('=');
+            if (eq_pos != std::string_view::npos) {
+                std::string_view key = tok.substr(0, eq_pos);
+                std::string_view val = tok.substr(eq_pos + 1);
+                
+                if (key == "domain") {
+                    parse_domain_list(val, options.domains, options.exclude_domains);
+                } else if (key == "from") {
+                    parse_domain_list(val, options.from_domains, options.exclude_domains);
+                } else if (key == "to") {
+                    parse_domain_list(val, options.to_domains, options.exclude_domains);
+                }
+                i = j + 1;
+                continue;
+            }
+
+            bool neg = false;
+            if (!tok.empty() && tok[0] == '~') {
+                neg = true;
+                tok.remove_prefix(1);
+            }
+
+            uint32_t bit = 0;
+
+            if (tok == "script") bit = 1 << 0;
+            else if (tok == "image") bit = 1 << 1;
+            else if (tok == "stylesheet") bit = 1 << 2;
+            else if (tok == "object") bit = 1 << 3;
+            else if (tok == "subdocument") bit = 1 << 4;
+            else if (tok == "xmlhttprequest" || tok == "xhr") bit = 1 << 5;
+            else if (tok == "websocket") bit = 1 << 6;
+            else if (tok == "webrtc") bit = 1 << 7;
+            else if (tok == "popup") bit = 1 << 8;
+            else if (tok == "third-party" || tok == "3p") {
+                if (neg) options.not_third_party = true;
+                else options.third_party = true;
+            } else if (tok == "match-case") {
+                options.match_case = true;
+            } else if (tok == "domain") {
+                // handled above with key=value
+            }
+
+            if (bit) {
+                if (neg) options.resource_mask &= ~bit;
+                else options.resource_mask |= bit;
+            }
+
+            i = j + 1;
+        }
+    }
+
+    static void parse_domain_list(std::string_view val, std::vector<std::string>& include, std::vector<std::string>& exclude) {
+        size_t i = 0;
+        while (i < val.size()) {
+            size_t j = i;
+            while (j < val.size() && val[j] != '|') ++j;
+            
+            std::string_view domain = val.substr(i, j - i);
+            if (!domain.empty()) {
+                if (domain[0] == '~') {
+                    exclude.push_back(std::string(domain.substr(1)));
+                } else {
+                    include.push_back(std::string(domain));
+                }
+            }
+            i = j + 1;
+        }
+    }
+
+    bool match(std::string_view url, uint32_t resource_type = 0, std::string_view document_domain = "") {
+        // Check resource type
+        if (this->options.resource_mask != 0) {
+            if (resource_type == 0) return false;
+            if (!(this->options.resource_mask & resource_type)) {
+                return false;
+            }
+        }
+
+        // Check third-party
+        if (this->options.third_party || this->options.not_third_party) {
+            bool is_third_party = !document_domain.empty() && !is_same_domain(url, document_domain);
+            if (this->options.third_party && !is_third_party) return false;
+            if (this->options.not_third_party && is_third_party) return false;
+        }
+
+        // Check domain restrictions
+        if (!check_domain_restrictions(document_domain, url)) {
+            return false;
+        }
+
+        // Match URL based on pattern type
+        if (this->is_regex && this->regex_pattern) {
+            std::string url_str(url);
+            try {
+                return std::regex_search(url_str, *this->regex_pattern);
+            } catch (...) {
+                return false;
+            }
+        }
+
+        if (this->domain_anchor) {
+            std::string_view target = url;
+            size_t scheme_end = url.find("://");
+            if (scheme_end != std::string_view::npos) {
+                target.remove_prefix(scheme_end + 3);
+            }
+            size_t path_start = target.find_first_of("/:#?");
+            if (path_start != std::string_view::npos) {
+                target = target.substr(0, path_start);
+            }
+            return glob_match(target, this->pattern) || glob_match(target, "*." + this->pattern);
+        }
+        return glob_match(url, this->pattern);
+    }
+
+    static bool is_same_domain(std::string_view url, std::string_view domain) {
+        size_t scheme_end = url.find("://");
+        std::string_view host = url;
+        if (scheme_end != std::string_view::npos) {
+            host.remove_prefix(scheme_end + 3);
+        }
+        size_t path_start = host.find_first_of("/:#?");
+        if (path_start != std::string_view::npos) {
+            host = host.substr(0, path_start);
+        }
+        
+        // Check if host ends with domain
+        if (host.size() < domain.size()) return false;
+        auto pos = host.rfind(domain);
+        if (pos == std::string_view::npos) return false;
+        if (pos + domain.size() != host.size()) return false;
+        if (pos > 0 && host[pos - 1] != '.') return false;
+        return true;
+    }
+
+    bool check_domain_restrictions(std::string_view document_domain, std::string_view request_url = "") {
+        // Check from domains (document domain)
+        if (!this->options.from_domains.empty()) {
+            bool matched = false;
+            for (const auto& d : this->options.from_domains) {
+                if (is_same_domain(document_domain, d)) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) return false;
+        }
+
+        // Check exclude domains (applies to document domain)
+        for (const auto& d : this->options.exclude_domains) {
+            if (is_same_domain(document_domain, d)) {
+                return false;
+            }
+        }
+
+        // Check include domains (generic domain option, applies to document domain)
+        if (!this->options.domains.empty()) {
+            bool matched = false;
+            for (const auto& d : this->options.domains) {
+                if (is_same_domain(document_domain, d)) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) return false;
+        }
+
+        // Check to domains (request URL domain)
+        if (!this->options.to_domains.empty() && !request_url.empty()) {
+            bool matched = false;
+            for (const auto& d : this->options.to_domains) {
+                if (is_same_domain(request_url, d)) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) return false;
+        }
+
+        return true;
+    }
+
+};
+
+struct LunaAdBlockerList {
+    std::string name;
+    std::string url;
+};
+
+struct LunaAdBlocker {
+    std::vector<LunaAdBlockerRule> network_rules;
+    std::vector<LunaAdBlockerRule> network_exception_rules;
+    std::vector<LunaAdBlockerRule> content_rules;
+
+    std::vector<LunaAdBlockerList> lists;
+    std::filesystem::path lists_dir;
+    std::filesystem::path timestamps_db;
+    std::unordered_map<std::string, uint64_t> timestamps;
+
+    LunaAdBlocker(const std::filesystem::path base_path) {
+        this->lists_dir = base_path;
+        this->timestamps_db = base_path / "timestamps_db";
+        curl_global_init(CURL_GLOBAL_DEFAULT);
+    }
+    
+    ~LunaAdBlocker() {
+        curl_global_cleanup();
+    }
+
+    void setup(std::initializer_list<const char*> lists) {
+        if (!std::filesystem::exists(this->lists_dir)) {
+            if (!std::filesystem::create_directories(this->lists_dir)) LUNA_FAIL("The adblocker lists directory can't be created at `{}`, please cheack your permissions", this->lists_dir.c_str());
+        }
+        if (std::filesystem::exists(this->timestamps_db)) {
+            auto *file = fopen(this->timestamps_db.c_str(), "r");
+            if (!file) {
+                LUNA_LOG("Cant open {} to load the latest update timestamps, please check your permissions", this->timestamps_db.c_str());
+            } else {
+                char* buf = nullptr;
+                size_t n = 0;
+                ssize_t bytes_read;
+                while ((bytes_read = getline(&buf, &n, file)) != -1) {
+                    std::string line(buf);
+
+                    if (!line.empty() && line.back() == '\n') line.pop_back();
+                    if (!line.empty() && line.back() == '\r') line.pop_back();
+
+                    const auto pos = line.find(':');
+                    if (pos == std::string::npos) continue;
+
+                    const auto key = line.substr(0, pos);
+                    if (!this->timestamps.contains(key) && line.size() > pos + 1) {
+                        const auto val = str2u64(std::string_view(line.c_str() + pos + 1));
+                        this->timestamps.emplace(key, val);
+                    }
+                }
+                free(buf);
+                fclose(file);
+            }
+        }
+        for (const auto list : lists) {
+            std::string url(list);
+            auto name = url.substr(url.find_last_of('/') + 1);
+            if (name.empty()) name = "list_" + std::to_string(std::hash<std::string>{}(url));
+            this->add_list(url, name);
+        }
+    }
+
+    void update_lists() {
+        const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count();
+
+        auto read_timestamp = [this](const std::string& key) -> uint64_t {
+            if (!std::filesystem::exists(this->timestamps_db)) return 0;
+            std::ifstream db(this->timestamps_db);
+            std::string line;
+            while (std::getline(db, line)) {
+                if (!line.empty()) {
+                    if (line.back() == '\n') line.pop_back();
+                    if (line.back() == '\r') line.pop_back();
+                    auto pos = line.find(':');
+                    if (pos != std::string::npos && line.substr(0, pos) == key) {
+                        return str2u64(line.substr(pos + 1));
+                    }
+                }
+            }
+            return 0;
+        };
+
+        auto write_timestamp = [this](const std::string& key, uint64_t ts) {
+            std::vector<std::string> lines;
+            if (std::filesystem::exists(this->timestamps_db)) {
+                std::ifstream db(this->timestamps_db);
+                std::string line;
+                while (std::getline(db, line)) {
+                    if (!line.empty()) {
+                        if (line.back() == '\n') line.pop_back();
+                        if (line.back() == '\r') line.pop_back();
+                        lines.push_back(line);
+                    }
+                }
+            }
+
+            bool found = false;
+            for (auto& l : lines) {
+                auto pos = l.find(':');
+                if (pos != std::string::npos && l.substr(0, pos) == key) {
+                    l = key + ":" + std::to_string(ts);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) lines.push_back(key + ":" + std::to_string(ts));
+
+            std::ofstream out(this->timestamps_db, std::ios::trunc);
+            for (auto& l : lines) out << l << "\n";
+        };
+
+        for (auto& list : this->lists) {
+            const auto filter_path = this->lists_dir / list.name;
+            uint16_t expires_days = 10;
+
+            if (std::filesystem::exists(filter_path)) {
+                const size_t MAX_HEADER = 19;
+                std::ifstream f(filter_path);
+                std::string line;
+                size_t i = 0;
+                while (std::getline(f, line) && i < MAX_HEADER) {
+                    if (line.rfind("! Expires", 0) == 0) {
+                        auto pos = line.find(':');
+                        if (pos != std::string::npos) {
+                            std::string rest = line.substr(pos + 1);
+                            std::string num_str;
+                            for (const auto ch : rest) {
+                                if (std::isdigit(ch)) {
+                                    num_str += ch;
+                                } else if (!num_str.empty()) {
+                                    break;
+                                }
+                            }
+                            if (!num_str.empty()) {
+                                expires_days = static_cast<uint16_t>(str2u64(num_str));
+                            }
+                        }
+                        break;
+                    }
+                    ++i;
+                }
+            }
+
+            uint64_t last_ts = read_timestamp(list.name);
+            uint64_t expires_sec = expires_days * 86400;
+
+            if (now - last_ts >= expires_sec) {
+                LUNA_LOG("Updating adblock list: {}", list.name);
+                this->network_rules.clear();
+                this->network_exception_rules.clear();
+                this->content_rules.clear();
+
+                if (download_list(list.url, filter_path)) {
+                    write_timestamp(list.name, now);
+                    this->parse_list_file(filter_path);
+                }
+            }
+        }
+    }
+
+    bool add_list(std::string url, std::string name) {
+        for (const auto& list : this->lists) {
+            if (list.url == url) {
+                LUNA_LOG("{} arleady exists in the adblocker lists, maybe try update instead", url);
+                return false;
+            }
+            if (list.name == name) {
+                LUNA_LOG("List name `{}` already in use, try a different name, tha name has to be unique", name);
+                return false;
+            }
+        }
+        const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count();
+        const auto filter_path = this->lists_dir / name;
+
+        auto write_timestamp = [this](const std::string& key, uint64_t ts) {
+            std::vector<std::string> lines;
+            if (std::filesystem::exists(this->timestamps_db)) {
+                std::ifstream db(this->timestamps_db);
+                std::string line;
+                while (std::getline(db, line)) {
+                    if (!line.empty()) {
+                        if (line.back() == '\n') line.pop_back();
+                        if (line.back() == '\r') line.pop_back();
+                        lines.push_back(line);
+                    }
+                }
+            }
+
+            bool found = false;
+            for (auto& l : lines) {
+                auto pos = l.find(':');
+                if (pos != std::string::npos && l.substr(0, pos) == key) {
+                    l = key + ":" + std::to_string(ts);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) lines.push_back(key + ":" + std::to_string(ts));
+
+            std::ofstream out(this->timestamps_db, std::ios::trunc);
+            for (auto& l : lines) out << l << "\n";
+        };
+
+        auto read_timestamp = [this](const std::string& key) -> uint64_t {
+            if (!std::filesystem::exists(this->timestamps_db)) return 0;
+            std::ifstream db(this->timestamps_db);
+            std::string line;
+            while (std::getline(db, line)) {
+                if (!line.empty()) {
+                    if (line.back() == '\n') line.pop_back();
+                    if (line.back() == '\r') line.pop_back();
+                    auto pos = line.find(':');
+                    if (pos != std::string::npos && line.substr(0, pos) == key) {
+                        return str2u64(line.substr(pos + 1));
+                    }
+                }
+            }
+            return 0;
+        };
+
+        uint16_t expires_days = 10;
+        if (std::filesystem::exists(filter_path)) {
+            const size_t MAX_HEADER = 19;
+            std::ifstream f(filter_path);
+            std::string line;
+            size_t i = 0;
+            while (std::getline(f, line) && i < MAX_HEADER) {
+                if (line.rfind("! Expires", 0) == 0) {
+                    auto pos = line.find(':');
+                    if (pos != std::string::npos) {
+                        std::string rest = line.substr(pos + 1);
+                        std::string num_str;
+                        for (const auto ch : rest) {
+                            if (std::isdigit(ch)) {
+                                num_str += ch;
+                            } else if (!num_str.empty()) {
+                                break;
+                            }
+                        }
+                        if (!num_str.empty()) {
+                            expires_days = static_cast<uint16_t>(str2u64(num_str));
+                        }
+                    }
+                    break;
+                }
+                ++i;
+            }
+            uint64_t last_ts = read_timestamp(name);
+            uint64_t expires_sec = expires_days * 86400;
+
+            if (now - last_ts >= expires_sec) {
+                if (!download_list(url, filter_path)) return false;
+                write_timestamp(name, now);
+            }
+        } else {
+            if (!download_list(url, filter_path)) return false;
+            write_timestamp(name, now);
+        }
+        this->lists.emplace_back(LunaAdBlockerList{name, url});
+        this->parse_list_file(filter_path);
+        return true;
+    }
+
+    static bool download_list(const std::string &url, const std::filesystem::path& out_path) {
+        LUNA_LOG("LunaAdBlocker: start downloading {} at {}", url, out_path.c_str());
+        CURL* curl = curl_easy_init();
+        if (!curl) return false;
+
+        std::string buffer;
+
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+
+        CURLcode res = curl_easy_perform(curl);
+        curl_easy_cleanup(curl);
+
+        if (res != CURLE_OK) return false;
+
+        std::ofstream out(out_path, std::ios::binary);
+        out.write(buffer.data(), buffer.size());
+        out.close();
+
+        return true;
+    }
+
+    void parse_list_file(const std::filesystem::path& path) {
+        std::ifstream f(path);
+        std::string line;
+
+        bool in_supported_block = true;  // Track if we're in a conditional block we support
+        std::vector<bool> conditional_stack;
+
+        while (std::getline(f, line)) {
+            // Handle conditional blocks
+            if (line.rfind("!#if ", 0) == 0) {
+                std::string condition = line.substr(4);  // Skip "!#if"
+                // Trim whitespace
+                condition.erase(0, condition.find_first_not_of(" \t"));
+                condition.erase(condition.find_last_not_of(" \t") + 1);
+                
+                bool supported = false;
+                // Check if this is a condition we want to include
+                if (condition == "ext_luna" || condition == "env_luna") {
+                    supported = true;
+                }
+                // Skip ext_ubol, env_safari, etc.
+                
+                conditional_stack.push_back(in_supported_block);
+                in_supported_block = in_supported_block && supported;
+                continue;
+            }
+            
+            if (line.rfind("!#endif", 0) == 0) {
+                if (!conditional_stack.empty()) {
+                    in_supported_block = conditional_stack.back();
+                    conditional_stack.pop_back();
+                }
+                continue;
+            }
+
+            // Skip if we're in an unsupported conditional block
+            if (!in_supported_block) continue;
+
+            // Skip comments
+            if (line.empty() || line[0] == '!') continue;
+
+            auto rule = LunaAdBlockerRule::parse(line);
+
+            switch (rule.type) {
+                case LunaAdBlockerRuleType::NetworkBlockRule:
+                    network_rules.push_back(std::move(rule));
+                    break;
+                case LunaAdBlockerRuleType::NetworkExceptionRule:
+                    network_exception_rules.push_back(std::move(rule));
+                    break;
+                case LunaAdBlockerRuleType::ContentHideRule:
+                    content_rules.push_back(std::move(rule));
+                    break;
+            }
+        }
+    }
+
+    bool block_request(std::string_view url, uint32_t resource_type = 0, std::string_view document_domain = "") {
+        // Exempt internal luna:* URLs from ad blocking
+        if (url.rfind("luna:", 0) == 0) {
+            return false;
+        }
+        
+        for (auto& exc : this->network_exception_rules) {
+            if (exc.match(url, resource_type, document_domain)) {
+#ifdef LUNA_TESTING
+                LUNA_LOG("Ignored by rule: {}", exc.pattern);
+#endif // LUNA_TESTING
+               return false;
+            };
+        }
+        for (auto& blk : this->network_rules) {
+            if (blk.match(url, resource_type, document_domain)) {
+#ifdef LUNA_TESTING
+                LUNA_LOG("Blocked by rule: {}", blk.pattern);
+#endif // LUNA_TESTING
+               return true;
+            }
+        }
+        return false;
+    }
+
+};
+
+struct NetworkAdBlocker: QWebEngineUrlRequestInterceptor {
+    LunaAdBlocker &adblocker;
+
+    NetworkAdBlocker(LunaAdBlocker &adblocker) : adblocker(adblocker) {
+    }
+
+    void interceptRequest(QWebEngineUrlRequestInfo &info) override {
+        uint32_t resource_type = 0;
+        switch (info.resourceType()) {
+            case QWebEngineUrlRequestInfo::ResourceTypeScript:
+                resource_type = 1 << 0;
+                break;
+            case QWebEngineUrlRequestInfo::ResourceTypeImage:
+                resource_type = 1 << 1;
+                break;
+            case QWebEngineUrlRequestInfo::ResourceTypeStylesheet:
+                resource_type = 1 << 2;
+                break;
+            case QWebEngineUrlRequestInfo::ResourceTypeObject:
+                resource_type = 1 << 3;
+                break;
+            case QWebEngineUrlRequestInfo::ResourceTypeSubFrame:
+                resource_type = 1 << 4;
+                break;
+            case QWebEngineUrlRequestInfo::ResourceTypeXhr:
+                resource_type = 1 << 5;
+                break;
+            case QWebEngineUrlRequestInfo::ResourceTypeWebSocket:
+                resource_type = 1 << 6;
+                break;
+            default:
+                break;
+        }
+        const auto url = info.requestUrl().toString().toStdString();
+        const auto first_party = info.firstPartyUrl().toString().toStdString();
+        
+        // Extract document domain from first-party URL
+        std::string document_domain;
+        size_t scheme_end = first_party.find("://");
+        if (scheme_end != std::string::npos) {
+            std::string_view host(first_party);
+            host.remove_prefix(scheme_end + 3);
+            size_t path_start = host.find_first_of("/:#?");
+            if (path_start != std::string_view::npos) {
+                document_domain = std::string(host.substr(0, path_start));
+            } else {
+                document_domain = std::string(host);
+            }
+        }
+        
+        const auto block = this->adblocker.block_request(url, resource_type, document_domain);
+        if (block) {
+            total_blocked_ads++;
+            LUNA_LOG("LunaAdBlocker: blocked [{}]: {}", total_blocked_ads, url);
+            info.block(true);
+        }
+    }
+};
+
 // struct FuckAllJavaScriptFilter: QWebEngineUrlRequestInterceptor { };
 
 struct LunaBrowserSchemeHandler: QWebEngineUrlSchemeHandler {
@@ -488,6 +1318,7 @@ struct LunaBrowserHistory {
                 buf = nullptr;
                 n = 0;
             }
+            free(buf);
             fclose(file);
             this->new_start = entries->size();
         } else {
@@ -539,7 +1370,7 @@ struct LunaBrowserProfile {
     LunaBrowserBookmarks bookmarks;
     QWebEngineProfile *web_engine_profile;
 
-    LunaBrowserProfile(std::filesystem::path profile_base, char* name) {
+    LunaBrowserProfile(std::filesystem::path profile_base, char* name, LunaAdBlocker& adblocker, bool disable_adblocker = false) {
         this->name = name;
         LunaBrowserHistory history(profile_base / "history");
         this->history = history;
@@ -550,6 +1381,9 @@ struct LunaBrowserProfile {
         web_engine_profile->scripts()->insert(makeFModeScript());
         web_engine_profile->setCachePath((profile_base / "cache").c_str());
         web_engine_profile->installUrlSchemeHandler(LUNA_PREFEX, new LunaBrowserSchemeHandler());
+        if (!disable_adblocker) {
+            web_engine_profile->setUrlRequestInterceptor(new NetworkAdBlocker(adblocker));
+        }
         this->web_engine_profile = web_engine_profile;
     }
 };
@@ -572,6 +1406,7 @@ struct LunaBrowser: QMainWindow {
     StatusBar* status_bar;
     LunaBrowserOptions opts;
     LunaBrowserProfile profile;
+    LunaAdBlocker& adblocker;
 
     void update_mode(const BrowserMode m) {
         this->mode = m;
@@ -579,7 +1414,7 @@ struct LunaBrowser: QMainWindow {
         // QApplication::processEvents(); // in case we neede to change ui from a none ui thread
     }
 
-    LunaBrowser(const LunaBrowserOptions opts, const LunaBrowserProfile profile): opts(opts), profile(profile) {
+    LunaBrowser(const LunaBrowserOptions opts, const LunaBrowserProfile profile, LunaAdBlocker& adblocker): opts(opts), profile(profile), adblocker(adblocker) {
         this->setWindowTitle("Luna Browser");
         auto *central = new QWidget(this);
         auto *vbox = new QVBoxLayout(central);
@@ -1099,8 +1934,33 @@ int main(int argc, char *argv[]) {
         LUNA_LOG("{}", "The provided profile dosen't exists, we will create it");
         if(!std::filesystem::create_directories(path)) LUNA_FAIL("{} can't be created, please cheack your permissions", path.c_str());
     }
-    LunaBrowserProfile profile(path, profile_name);
-    LunaBrowser browser(opts, profile);
+
+    LunaAdBlocker adblocker(std::filesystem::path(get_app_data_base()) / "adblocker");
+    if (!opts.disable_adblocker) {
+        const auto easylist_url = "https://easylist.to/easylist/easylist.txt";
+        const auto default_lists = {
+            easylist_url,
+            // "file:///home/anas/code/luna/test_rules.txt",
+        };
+        adblocker.setup(default_lists);
+        LUNA_LOG("Adblocker initialized with: {} network_rules, {} network_exception_rules, {}, content_rules", adblocker.network_rules.size(), adblocker.network_exception_rules.size(), adblocker.content_rules.size());
+        // Debug: print loaded rules
+        LUNA_LOG("{}", "=== Loaded Network Rules ===");
+        for (const auto& rule : adblocker.network_rules) {
+            LUNA_LOG("  [Network] pattern='{}' exact_start={} exact_end={} domain_anchor={}", rule.pattern, rule.exact_start, rule.exact_end, rule.domain_anchor);
+        }
+        LUNA_LOG("{}", "=== Loaded Network Exception Rules ===");
+        for (const auto& rule : adblocker.network_exception_rules) {
+            LUNA_LOG("  [Exception] pattern='{}' exact_start={} exact_end={} domain_anchor={}", rule.pattern, rule.exact_start, rule.exact_end, rule.domain_anchor);
+        }
+        LUNA_LOG("{}", "=== Loaded Content Rules ===");
+        for (const auto& rule : adblocker.content_rules) {
+            LUNA_LOG("  [Content] pattern='{}' selector='{}'", rule.pattern, rule.selector);
+        }
+    }
+
+    LunaBrowserProfile profile(path, profile_name, adblocker, opts.disable_adblocker);
+    LunaBrowser browser(opts, profile, adblocker);
     app.installEventFilter(&browser);
     browser.prepare();
     browser.show();
