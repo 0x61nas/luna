@@ -1442,7 +1442,6 @@ struct LunaBrowser: QMainWindow {
             this->error_timer->stop();
             this->user_input->setVisible(true);
             this->user_input->setFocus();
-            this->user_input->setText(":");
             this->user_input->setCursorPosition(1);
             this->history_index = -1;
             this->saved_input.clear();
@@ -1531,7 +1530,7 @@ struct LunaBrowser: QMainWindow {
 
         QObject::connect(this->user_input, &QLineEdit::returnPressed, this, [this]() {
             QString text = this->user_input->text();
-            if (!text.isEmpty() && text.startsWith(":")) {
+            if (!text.isEmpty()) {
                 this->command_history.append(text);
             }
             this->handle_input_command(text);
@@ -1762,14 +1761,14 @@ struct LunaBrowser: QMainWindow {
                 } break;
                 case Qt::Key_Colon:
                 case Qt::Key_Semicolon: this->update_mode(BrowserMode::CommandMode); break;
-                case Qt::Key_Escape:
+                case Qt::Key_Escape: {
                     if (this->error_label->isVisible()) {
                         this->error_label->setVisible(false);
                         this->error_timer->stop();
                     }
-                    break;
+                } break;
             }
-            return true;
+            return true; // we handled that key event
         } else {
             if (key == Qt::Key_Escape) {
                 if (this->mode == BrowserMode::CaretMode) {
@@ -1885,7 +1884,7 @@ struct LunaBrowser: QMainWindow {
         if (this->last_error.isEmpty()) return;
         this->error_label->setText("Error: " + this->last_error);
         this->error_label->setVisible(true);
-        this->error_timer->start(5000);
+        this->error_timer->start(5000); // 5 seconds
     }
 
     void reopen_latest_tab() {
@@ -1933,15 +1932,11 @@ struct LunaBrowser: QMainWindow {
             return;
         }
 
-        LUNA_LOG("Command: {}", cmd.toStdString());
-        if (!cmd.startsWith(":")) {
-            this->user_input->clear();
-            this->user_input->setVisible(false);
-            this->update_mode(BrowserMode::NormalMode);
-            return;
+        if (cmd.startsWith(":")) {
+            cmd = cmd.mid(1); // skip the ':'
         }
+        LUNA_LOG("Command: `{}`", cmd.toStdString());
 
-        cmd = cmd.mid(1); // skip the ':'
         QString cmd_name;
         QString args;
         int space_idx = cmd.indexOf(' ');
