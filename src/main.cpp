@@ -27,6 +27,7 @@
 #include <QStringListModel>
 #include <QListView>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <print>
 #include <string>
 #include <cstdlib>
@@ -294,6 +295,7 @@ struct StatusBar: QWidget {
     QLabel *url;
     QLabel *position; // [top] -> [100%]
     QLabel *tab_index; // the selected tab index from the total [2/3]
+    QLabel *load_time;
     QLabel *keystr;
     QProgressBar *progress;
 
@@ -316,6 +318,10 @@ struct StatusBar: QWidget {
         this->tab_index = new QLabel("[1/1]", this);
         this->tab_index->setTextFormat(Qt::PlainText);
         this->tab_index->setStyleSheet("color: #ebdbb2; padding: 2px;");
+
+        this->load_time = new QLabel("", this);
+        this->load_time->setTextFormat(Qt::PlainText);
+        this->load_time->setStyleSheet("color: #ebdbb2; padding: 2px;");
         
         this->keystr = new QLabel("", this);
         this->keystr->setTextFormat(Qt::PlainText);
@@ -333,6 +339,7 @@ struct StatusBar: QWidget {
         layout->addWidget(this->progress);
         layout->addWidget(this->position);
         layout->addWidget(this->tab_index);
+        layout->addWidget(this->load_time);
         layout->addWidget(this->keystr);
         
         this->setStyleSheet("background: #282828;");
@@ -366,6 +373,10 @@ struct StatusBar: QWidget {
     void set_position(const QString &text) {
         this->position->setText(text);
     }
+
+    void set_load_time(const QString &text) {
+        this->load_time->setText(text);
+    }
 };
 
 typedef enum {
@@ -384,6 +395,7 @@ struct TabBody: QWidget {
         QSplitter *splitter;
         QWebEngineView *view;
     } val;
+    QElapsedTimer load_timer;
 
     TabBody(QWebEngineView *v) {
         auto *layout = new QVBoxLayout(this);
@@ -1670,6 +1682,7 @@ struct LunaBrowser: QMainWindow {
         auto tab_body = new TabBody(web_engine_view);
         const auto url = QUrl(tab_url);
         const int idx = this->tabs->addTab(tab_body, "New Tab");
+        tab_body->load_timer.start();
         if (instantly_switch) {
             this->tabs->setCurrentIndex(idx);
         }
@@ -1708,13 +1721,20 @@ struct LunaBrowser: QMainWindow {
         QObject::connect(web_engine_view, &QWebEngineView::loadFinished, this, [web_engine_view, this]() {
                 int current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
                 if (current_idx == this->tabs->currentIndex()) {
-                    std::print("Page load has finshed: TODO update the status_bar and loadtime\n");
+                    auto *tab_body = dynamic_cast<TabBody*>(web_engine_view->parentWidget());
+                    if (tab_body) {
+                        qint64 elapsed = tab_body->load_timer.elapsed();
+                        this->status_bar->set_load_time(QString("%1ms").arg(elapsed));
+                        tab_body->load_timer.restart();
+                    }
                 }
-            // TODO
         });
         QObject::connect(web_engine_view, &QWebEngineView::loadProgress, this, [web_engine_view, this](const int progress) {
             int current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
             if (current_idx == this->tabs->currentIndex()) {
+                auto *tab_body = dynamic_cast<TabBody*>(web_engine_view->parentWidget());
+                qint64 elapsed = tab_body->load_timer.elapsed();
+                this->status_bar->set_load_time(QString("%1ms").arg(elapsed));
                 this->status_bar->set_progress(progress);
             }
         });
