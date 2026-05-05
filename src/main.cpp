@@ -13,6 +13,7 @@
 #include <QKeyEvent>
 #include <QTabBar>
 #include <QLabel>
+#include <QProgressBar>
 #include <QSplitter>
 #include <QHBoxLayout>
 #include <QWebEngineUrlSchemeHandler>
@@ -294,6 +295,7 @@ struct StatusBar: QWidget {
     QLabel *position; // [top] -> [100%]
     QLabel *tab_index; // the selected tab index from the total [2/3]
     QLabel *keystr;
+    QProgressBar *progress;
 
     StatusBar(QWidget *parent = nullptr) : QWidget(parent) {
         auto *layout = new QHBoxLayout(this);
@@ -318,9 +320,17 @@ struct StatusBar: QWidget {
         this->keystr = new QLabel("", this);
         this->keystr->setTextFormat(Qt::PlainText);
         this->keystr->setStyleSheet("color: #ebdbb2; padding: 2px;");
+
+        this->progress = new QProgressBar(this);
+        this->progress->setRange(0, 100);
+        this->progress->setValue(0);
+        this->progress->setTextVisible(false);
+        this->progress->setMaximumHeight(10);
+        this->progress->setStyleSheet("QProgressBar::chunk { background: #98971a; }");
         
         layout->addWidget(this->txt);
         layout->addWidget(this->url, 1);
+        layout->addWidget(this->progress);
         layout->addWidget(this->position);
         layout->addWidget(this->tab_index);
         layout->addWidget(this->keystr);
@@ -336,11 +346,25 @@ struct StatusBar: QWidget {
             case BrowserMode::CaretSelecionnMode: this->txt->setText(" SEL "); break;
             case BrowserMode::NormieMode: this->txt->setText(" IGNORE "); break;
             case BrowserMode::CommandMode: this->txt->setText(nullptr); break;
+            case BrowserMode::SearchMode: this->txt->setText(" SEARCH "); break;
         }
     }
 
     void set_url(const QString url) {
         this->url->setText(url);
+    }
+
+    void set_progress(const int p) {
+        this->progress->setValue(p);
+        this->progress->setVisible(p > 0 && p < 100);
+    }
+
+    void set_tab_index(const int current, const int total) {
+        this->tab_index->setText(QString("[%1/%2]").arg(current + 1).arg(total));
+    }
+
+    void set_position(const QString &text) {
+        this->position->setText(text);
     }
 };
 
@@ -1590,13 +1614,12 @@ struct LunaBrowser: QMainWindow {
         )");
 
         //
-        QObject::connect(this->tabs, &QTabWidget::currentChanged, [&](int) {
+        QObject::connect(this->tabs, &QTabWidget::currentChanged, [&](int idx) {
             auto *v = dynamic_cast<TabBody*>(this->tabs->currentWidget())->active_veiw();
             if (v) {
-                // this->urlbar->setText(v->url().toString());
                 this->status_bar->set_url(v->url().toString());
-                QObject::connect(v, &QWebEngineView::urlChanged, [&](const QUrl &u) {
-                    // this->urlbar->setText(u.toString());
+                this->status_bar->set_tab_index(idx, this->tabs->count());
+                QObject::connect(v, &QWebEngineView::urlChanged, [this](const QUrl &u) {
                     this->status_bar->set_url(u.toString());
                 });
             }
@@ -1684,7 +1707,18 @@ struct LunaBrowser: QMainWindow {
             // TODO
         });
         QObject::connect(web_engine_view, &QWebEngineView::loadProgress, this, [idx, this](const int progress) {
-            // this->update_load_progress(idx, progress);
+            if (this->tabs->currentIndex() == idx) {
+                this->status_bar->set_progress(progress);
+            }
+        });
+        QObject::connect(web_engine_view->page(), &QWebEnginePage::scrollPositionChanged, this, [idx, this, web_engine_view](const QPointF &pos) {
+            if (this->tabs->currentIndex() == idx) {
+                web_engine_view->page()->runJavaScript("Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100)", [this](const QVariant &val) {
+                    int pct = val.toInt();
+                    if (pct <= 0) this->status_bar->set_position("[top]");
+                    else this->status_bar->set_position(QString("[%1%]").arg(pct));
+                });
+            }
         });
         this->tabs_count += 1;
         // load the url
