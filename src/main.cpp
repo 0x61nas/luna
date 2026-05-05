@@ -544,6 +544,7 @@ struct LunaAdBlockerRule {
     std::string original_rule;
 #endif // LUNA_TESTING
 
+    // Based on: https://adblockplus.org/filter-cheatsheet#exceptions
     static LunaAdBlockerRule parse(std::string_view line) {
         LunaAdBlockerRule rule{};
 #ifdef LUNA_TESTING
@@ -578,8 +579,8 @@ struct LunaAdBlockerRule {
         // content rule
         if (content_pos != std::string_view::npos) {
             rule.type = LunaAdBlockerRuleType::ContentHideRule;
-            rule.pattern = std::string(line.substr(i, content_pos - i));
-            rule.selector = std::string(line.substr(content_pos + 2));
+            rule.pattern = line.substr(i, content_pos - i);
+            rule.selector = line.substr(content_pos + 2);
             return rule;
         }
 
@@ -883,114 +884,14 @@ struct LunaAdBlocker {
             }
         }
         for (const auto list : lists) {
-            std::string url(list);
-            auto name = url.substr(url.find_last_of('/') + 1);
-            if (name.empty()) name = "list_" + std::to_string(std::hash<std::string>{}(url));
-            this->add_list(url, name);
+            std::string_view url_sv(list);
+            auto name = url_sv.substr(url_sv.find_last_of('/') + 1);
+            if (name.empty()) name = "list_" + std::to_string(std::hash<std::string_view>{}(url_sv));
+            this->add_list(url_sv, name);
         }
     }
 
-    void update_lists() {
-        const auto now = std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch()
-        ).count();
-
-        auto read_timestamp = [this](const std::string& key) -> uint64_t {
-            if (!std::filesystem::exists(this->timestamps_db)) return 0;
-            std::ifstream db(this->timestamps_db);
-            std::string line;
-            while (std::getline(db, line)) {
-                if (!line.empty()) {
-                    if (line.back() == '\n') line.pop_back();
-                    if (line.back() == '\r') line.pop_back();
-                    auto pos = line.find(':');
-                    if (pos != std::string::npos && line.substr(0, pos) == key) {
-                        return str2u64(line.substr(pos + 1));
-                    }
-                }
-            }
-            return 0;
-        };
-
-        auto write_timestamp = [this](const std::string& key, uint64_t ts) {
-            std::vector<std::string> lines;
-            if (std::filesystem::exists(this->timestamps_db)) {
-                std::ifstream db(this->timestamps_db);
-                std::string line;
-                while (std::getline(db, line)) {
-                    if (!line.empty()) {
-                        if (line.back() == '\n') line.pop_back();
-                        if (line.back() == '\r') line.pop_back();
-                        lines.push_back(line);
-                    }
-                }
-            }
-
-            bool found = false;
-            for (auto& l : lines) {
-                auto pos = l.find(':');
-                if (pos != std::string::npos && l.substr(0, pos) == key) {
-                    l = key + ":" + std::to_string(ts);
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) lines.push_back(key + ":" + std::to_string(ts));
-
-            std::ofstream out(this->timestamps_db, std::ios::trunc);
-            for (auto& l : lines) out << l << "\n";
-        };
-
-        for (auto& list : this->lists) {
-            const auto filter_path = this->lists_dir / list.name;
-            uint16_t expires_days = 10;
-
-            if (std::filesystem::exists(filter_path)) {
-                const size_t MAX_HEADER = 19;
-                std::ifstream f(filter_path);
-                std::string line;
-                size_t i = 0;
-                while (std::getline(f, line) && i < MAX_HEADER) {
-                    if (line.rfind("! Expires", 0) == 0) {
-                        auto pos = line.find(':');
-                        if (pos != std::string::npos) {
-                            std::string rest = line.substr(pos + 1);
-                            std::string num_str;
-                            for (const auto ch : rest) {
-                                if (std::isdigit(ch)) {
-                                    num_str += ch;
-                                } else if (!num_str.empty()) {
-                                    break;
-                                }
-                            }
-                            if (!num_str.empty()) {
-                                expires_days = static_cast<uint16_t>(str2u64(num_str));
-                            }
-                        }
-                        break;
-                    }
-                    ++i;
-                }
-            }
-
-            uint64_t last_ts = read_timestamp(list.name);
-            uint64_t expires_sec = expires_days * 86400;
-
-            if (now - last_ts >= expires_sec) {
-                LUNA_LOG("Updating adblock list: {}", list.name);
-                this->network_rules.clear();
-                this->network_exception_rules.clear();
-                this->content_rules.clear();
-
-                if (download_list(list.url, filter_path)) {
-                    write_timestamp(list.name, now);
-                    this->parse_list_file(filter_path);
-                }
-            }
-        }
-    }
-
-    bool add_list(std::string url, std::string name) {
+    bool add_list(std::string_view url, std::string_view name) {
         for (const auto& list : this->lists) {
             if (list.url == url) {
                 LUNA_LOG("{} arleady exists in the adblocker lists, maybe try update instead", url);
@@ -1006,7 +907,7 @@ struct LunaAdBlocker {
         ).count();
         const auto filter_path = this->lists_dir / name;
 
-        auto write_timestamp = [this](const std::string& key, uint64_t ts) {
+        auto write_timestamp = [this](std::string_view key, uint64_t ts) {
             std::vector<std::string> lines;
             if (std::filesystem::exists(this->timestamps_db)) {
                 std::ifstream db(this->timestamps_db);
@@ -1024,18 +925,18 @@ struct LunaAdBlocker {
             for (auto& l : lines) {
                 auto pos = l.find(':');
                 if (pos != std::string::npos && l.substr(0, pos) == key) {
-                    l = key + ":" + std::to_string(ts);
+                    l = std::string(key) + ":" + std::to_string(ts);
                     found = true;
                     break;
                 }
             }
-            if (!found) lines.push_back(key + ":" + std::to_string(ts));
+            if (!found) lines.push_back(std::string(key) + ":" + std::to_string(ts));
 
             std::ofstream out(this->timestamps_db, std::ios::trunc);
             for (auto& l : lines) out << l << "\n";
         };
 
-        auto read_timestamp = [this](const std::string& key) -> uint64_t {
+        auto read_timestamp = [this](std::string_view key) -> uint64_t {
             if (!std::filesystem::exists(this->timestamps_db)) return 0;
             std::ifstream db(this->timestamps_db);
             std::string line;
@@ -1090,19 +991,119 @@ struct LunaAdBlocker {
             if (!download_list(url, filter_path)) return false;
             write_timestamp(name, now);
         }
-        this->lists.emplace_back(LunaAdBlockerList{name, url});
+        this->lists.emplace_back(LunaAdBlockerList{std::string(name), std::string(url)});
         this->parse_list_file(filter_path);
         return true;
     }
 
-    static bool download_list(const std::string &url, const std::filesystem::path& out_path) {
-        LUNA_LOG("LunaAdBlocker: start downloading {} at {}", url, out_path.c_str());
+    void update_lists() {
+        const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()
+        ).count();
+
+        auto write_timestamp = [this](std::string_view key, uint64_t ts) {
+            std::vector<std::string> lines;
+            if (std::filesystem::exists(this->timestamps_db)) {
+                std::ifstream db(this->timestamps_db);
+                std::string line;
+                while (std::getline(db, line)) {
+                    if (!line.empty()) {
+                        if (line.back() == '\n') line.pop_back();
+                        if (line.back() == '\r') line.pop_back();
+                        lines.push_back(line);
+                    }
+                }
+            }
+
+            bool found = false;
+            for (auto& l : lines) {
+                auto pos = l.find(':');
+                if (pos != std::string::npos && l.substr(0, pos) == key) {
+                    l = std::string(key) + ":" + std::to_string(ts);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) lines.push_back(std::string(key) + ":" + std::to_string(ts));
+
+            std::ofstream out(this->timestamps_db, std::ios::trunc);
+            for (auto& l : lines) out << l << "\n";
+        };
+
+        auto read_timestamp = [this](std::string_view key) -> uint64_t {
+            if (!std::filesystem::exists(this->timestamps_db)) return 0;
+            std::ifstream db(this->timestamps_db);
+            std::string line;
+            while (std::getline(db, line)) {
+                if (!line.empty()) {
+                    if (line.back() == '\n') line.pop_back();
+                    if (line.back() == '\r') line.pop_back();
+                    auto pos = line.find(':');
+                    if (pos != std::string::npos && line.substr(0, pos) == key) {
+                        return str2u64(line.substr(pos + 1));
+                    }
+                }
+            }
+            return 0;
+        };
+
+        for (auto& list : this->lists) {
+            const auto filter_path = this->lists_dir / list.name;
+            uint16_t expires_days = 10;
+
+            if (std::filesystem::exists(filter_path)) {
+                const size_t MAX_HEADER = 19;
+                std::ifstream f(filter_path);
+                std::string line;
+                size_t i = 0;
+                while (std::getline(f, line) && i < MAX_HEADER) {
+                    if (line.rfind("! Expires", 0) == 0) {
+                        auto pos = line.find(':');
+                        if (pos != std::string::npos) {
+                            std::string rest = line.substr(pos + 1);
+                            std::string num_str;
+                            for (const auto ch : rest) {
+                                if (std::isdigit(ch)) {
+                                    num_str += ch;
+                                } else if (!num_str.empty()) {
+                                    break;
+                                }
+                            }
+                            if (!num_str.empty()) {
+                                expires_days = static_cast<uint16_t>(str2u64(num_str));
+                            }
+                        }
+                        break;
+                    }
+                    ++i;
+                }
+                uint64_t last_ts = read_timestamp(list.name);
+                uint64_t expires_sec = expires_days * 86400;
+
+                if (now - last_ts >= expires_sec) {
+                    LUNA_LOG("Updating adblock list: {}", list.name);
+                    this->network_rules.clear();
+                    this->network_exception_rules.clear();
+                    this->content_rules.clear();
+
+                    if (download_list(list.url, filter_path)) {
+                        write_timestamp(list.name, now);
+                        this->parse_list_file(filter_path);
+                    }
+                }
+            }
+        }
+    }
+
+    static bool download_list(std::string_view url_sv, const std::filesystem::path& out_path) {
+        LUNA_LOG("LunaAdBlocker: start downloading {} at {}", url_sv, out_path.c_str());
         CURL* curl = curl_easy_init();
         if (!curl) return false;
 
         std::string buffer;
+        std::string url_str(url_sv);
 
-        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_URL, url_str.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -1238,21 +1239,21 @@ struct NetworkAdBlocker: QWebEngineUrlRequestInterceptor {
         }
         const auto url = info.requestUrl().toString().toStdString();
         const auto first_party = info.firstPartyUrl().toString().toStdString();
-        
+
         // Extract document domain from first-party URL
-        std::string document_domain;
+        std::string_view document_domain;
         size_t scheme_end = first_party.find("://");
         if (scheme_end != std::string::npos) {
             std::string_view host(first_party);
             host.remove_prefix(scheme_end + 3);
             size_t path_start = host.find_first_of("/:#?");
             if (path_start != std::string_view::npos) {
-                document_domain = std::string(host.substr(0, path_start));
+                document_domain = host.substr(0, path_start);
             } else {
-                document_domain = std::string(host);
+                document_domain = host;
             }
         }
-        
+
         const auto block = this->adblocker.block_request(url, resource_type, document_domain);
         if (block) {
             total_blocked_ads++;
@@ -1377,7 +1378,7 @@ struct LunaBrowserProfile {
     LunaBrowserBookmarks bookmarks;
     QWebEngineProfile *web_engine_profile;
 
-    LunaBrowserProfile(std::filesystem::path profile_base, char* name, LunaAdBlocker& adblocker, bool disable_adblocker = false) {
+    LunaBrowserProfile(std::filesystem::path profile_base, char* name, LunaAdBlocker& adblocker, bool disable_adblocker = false) : name(name) {
         this->name = name;
         LunaBrowserHistory history(profile_base / "history");
         this->history = history;
@@ -1770,7 +1771,7 @@ int main(int argc, char *argv[]) {
     // Frist of the firstest process the command line arguments.
     const auto bin = argv[0];
     for (int i = 1; i < argc; ++i) {
-        std::string s = argv[i];
+        std::string_view s(argv[i]);
 
         if (s == "-h" || s == "--help") {
             print_help(bin);
@@ -1794,9 +1795,9 @@ int main(int argc, char *argv[]) {
         } else if (s == "--private-window") {
             opts.private_window = true;
         } else if (!s.empty() && s[0] == '+') {
-            opts.commands.push_back(s.substr(1));
+            opts.commands.push_back(std::string(s.substr(1)));
         } else {
-            opts.urls.push_back(s);
+            opts.urls.push_back(std::string(s));
         }
     }
 
