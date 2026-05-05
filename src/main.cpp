@@ -540,9 +540,15 @@ struct LunaAdBlockerRule {
     bool is_regex = false;
     std::unique_ptr<std::regex> regex_pattern;
     LunaAdBlockerRuleOptions options;
+#ifdef LUNA_TESTING
+    std::string original_rule;
+#endif // LUNA_TESTING
 
     static LunaAdBlockerRule parse(std::string_view line) {
         LunaAdBlockerRule rule{};
+#ifdef LUNA_TESTING
+        rule.original_rule = line;
+#endif // LUNA_TESTING
         rule.type = LunaAdBlockerRuleType::NetworkBlockRule;
 
         size_t i = 0;
@@ -584,37 +590,20 @@ struct LunaAdBlockerRule {
             parse_options(opts, rule.options);
         }
 
-        // Check if it's a regex rule (starts with /)
-        if (i < end && line[i] == '/') {
-            // Find the closing / (not the options delimiter after $)
-            size_t regex_end = std::string_view::npos;
-            // Search for the closing / of the regex pattern
-            for (size_t j = i + 1; j < end; ++j) {
-                if (line[j] == '/') {
-                    regex_end = j;
-                    break;
-                }
-                // Handle escaped characters in regex
-                if (line[j] == '\\' && j + 1 < end) {
-                    ++j;  // skip next char
-                }
+        // Check if it's a regex rule (pattern part starts and ends with /)
+        if (i < end && line[i] == '/' && end > i + 1 && line[end - 1] == '/') {
+            rule.is_regex = true;
+            std::string regex_str(line.substr(i + 1, end - i - 2));
+            std::regex::flag_type flags = std::regex::ECMAScript;
+            if (!rule.options.match_case) {
+                flags |= std::regex::icase;
             }
-            if (regex_end != std::string_view::npos && regex_end > i) {
-                rule.is_regex = true;
-                std::string regex_str(line.substr(i + 1, regex_end - i - 1));
-                // Handle regex flags - options are parsed separately after $
-                std::regex::flag_type flags = std::regex::ECMAScript;
-                if (!rule.options.match_case) {
-                    flags |= std::regex::icase;
-                }
-                try {
-                    rule.regex_pattern = std::make_unique<std::regex>(regex_str, flags);
-                } catch (const std::regex_error& e) {
-                    // Invalid regex, treat as normal pattern
-                    rule.is_regex = false;
-                }
-                return rule;
+            try {
+                rule.regex_pattern = std::make_unique<std::regex>(regex_str, flags);
+            } catch (const std::regex_error& e) {
+                rule.is_regex = false;
             }
+            return rule;
         }
 
         // anchors
@@ -1196,7 +1185,7 @@ struct LunaAdBlocker {
         for (auto& exc : this->network_exception_rules) {
             if (exc.match(url, resource_type, document_domain)) {
 #ifdef LUNA_TESTING
-                LUNA_LOG("Ignored by rule: {}", exc.pattern);
+                LUNA_LOG("Ignored by rule: {}", exc.original_rule);
 #endif // LUNA_TESTING
                return false;
             };
@@ -1204,7 +1193,7 @@ struct LunaAdBlocker {
         for (auto& blk : this->network_rules) {
             if (blk.match(url, resource_type, document_domain)) {
 #ifdef LUNA_TESTING
-                LUNA_LOG("Blocked by rule: {}", blk.pattern);
+                LUNA_LOG("Blocked by rule: {}", blk.original_rule);
 #endif // LUNA_TESTING
                return true;
             }

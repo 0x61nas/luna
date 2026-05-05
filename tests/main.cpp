@@ -49,8 +49,8 @@ int test_easylist_samples() {
     ab.parse_list_file("tests/easylist.txt");
 
     LUNA_TEST_ASSERT(ab.block_request("https://thatsillyman.win") == false);
+    LUNA_TEST_ASSERT(ab.block_request("https://googleads.g.doubleclick.net/pagead/id") == true);
 
-    
     return luna_failed_tests;
 }
 
