@@ -48,6 +48,7 @@
         std::print(fmt "\n", __VA_ARGS__); \
     } while (0)
 
+
 #ifdef LUNA_DEBUG_BUILD
 struct AllocationMetrics {
     uint32_t total_allocated = 0;
@@ -73,6 +74,7 @@ const char* THIS_BROWSER_NAME = "luna";
 constexpr const char* LUNA_PREFEX = "luna"; // the prefex used for spiceal domains e.g. luna:newtab.
 const char* LUNA_NEW_TAB_URL = "luna:newtab";
 const char* DEFAULT_PAGE_URL = LUNA_NEW_TAB_URL;
+const char* THE_DEFAULT_SEARCH_ENGINE = "https://duckduckgo.com/?q=";
 const char* LUNA_NEW_TAB_PAGE_PATH = "newtab.html";
 
 // globals :3
@@ -213,6 +215,19 @@ static size_t curl_write_cb(void* ptr, size_t size, size_t nmemb, void* userdata
     std::string* out = static_cast<std::string*>(userdata);
     out->append(static_cast<char*>(ptr), size * nmemb);
     return size * nmemb;
+}
+
+static bool check_valid_url(const QString &str) {
+    // Simple check: has dot and no spaces, or has protocol
+    const QChar *data = str.data();
+    int len = str.length();
+    bool has_dot = false;
+    for (int i = 0; i < len; i++) {
+        if (data[i] == '.') has_dot = true;
+        if (data[i] == ' ') return false;
+    }
+    if (has_dot) return true;
+    return (str.startsWith("http://") || str.startsWith("https://") || str.startsWith("luna:"));
 }
 
 typedef enum {
@@ -1366,6 +1381,12 @@ struct LunaBrowserHistory {
         std::memcpy(p, str.c_str(), str.size() + 1);
         this->entries.emplace_back(p);
     }
+
+    void add_search(const char* query) {
+        char* p = new char[strlen(query) + 1];
+        std::memcpy(p, query, strlen(query) + 1);
+        this->entries.emplace_back(p);
+    }
 };
 
 struct LunaBrowserBookmarks {
@@ -1899,8 +1920,20 @@ struct LunaBrowser: QMainWindow {
                 return true;
             case BrowserCommands::OpenCommand:
             case BrowserCommands::NewTabComamand: {
-                QString url = args.isEmpty() ? DEFAULT_PAGE_URL : args;
-                if (!url.contains("://")) url = "https://" + url;
+                QString url = args;
+                if (!args.isEmpty()) {
+                    const bool is_url = check_valid_url(args);
+                    if (is_url) {
+                        if (!args.startsWith("http://") && !args.startsWith("https://")) {
+                            url = "http://" + url;
+                        }
+                    } else {
+                        url = THE_DEFAULT_SEARCH_ENGINE + QUrl::toPercentEncoding(args);
+                        this->profile.history.add_search(args.toStdString().c_str());
+                    }
+                } else {
+                    url = DEFAULT_PAGE_URL;
+                }
                 this->new_tab(this->profile.web_engine_profile, url.toStdString().c_str());
                 return true;
             }
