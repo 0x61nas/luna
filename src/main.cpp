@@ -1674,9 +1674,12 @@ struct LunaBrowser: QMainWindow {
             this->tabs->setCurrentIndex(idx);
         }
         // when the page dose load update the tab text
-        QObject::connect(web_engine_view, &QWebEngineView::titleChanged, [idx, this](const QString &t) {
-            std::print("{}: {}\n", idx, t.toStdString());
-            this->tabs->setTabText(idx, t);
+        QObject::connect(web_engine_view, &QWebEngineView::titleChanged, [web_engine_view, this](const QString &t) {
+            int current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
+            if (current_idx != -1) {
+                std::print("{}: {}\n", current_idx, t.toStdString());
+                this->tabs->setTabText(current_idx, t);
+            }
         });
         QObject::connect(web_engine_view->page(), &QWebEnginePage::newWindowRequested, [profile, this](QWebEngineNewWindowRequest &request) {
             if (!request.isUserInitiated()) {
@@ -1702,17 +1705,22 @@ struct LunaBrowser: QMainWindow {
             if (u.scheme() != LUNA_PREFEX) this->profile.history.append(u);
         });
         // update the status bar when the tab finshes loading
-        QObject::connect(web_engine_view, &QWebEngineView::loadFinished, this, [&]() {
-                std::print("Page load has finshed: TODO update the status_bar and loadtime\n");
+        QObject::connect(web_engine_view, &QWebEngineView::loadFinished, this, [web_engine_view, this]() {
+                int current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
+                if (current_idx == this->tabs->currentIndex()) {
+                    std::print("Page load has finshed: TODO update the status_bar and loadtime\n");
+                }
             // TODO
         });
-        QObject::connect(web_engine_view, &QWebEngineView::loadProgress, this, [idx, this](const int progress) {
-            if (this->tabs->currentIndex() == idx) {
+        QObject::connect(web_engine_view, &QWebEngineView::loadProgress, this, [web_engine_view, this](const int progress) {
+            int current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
+            if (current_idx == this->tabs->currentIndex()) {
                 this->status_bar->set_progress(progress);
             }
         });
-        QObject::connect(web_engine_view->page(), &QWebEnginePage::scrollPositionChanged, this, [idx, this, web_engine_view](const QPointF &pos) {
-            if (this->tabs->currentIndex() == idx) {
+        QObject::connect(web_engine_view->page(), &QWebEnginePage::scrollPositionChanged, this, [web_engine_view, this](const QPointF &pos) {
+            int current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
+            if (current_idx == this->tabs->currentIndex()) {
                 web_engine_view->page()->runJavaScript("Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100)", [this](const QVariant &val) {
                     int pct = val.toInt();
                     if (pct <= 0) this->status_bar->set_position("[top]");
