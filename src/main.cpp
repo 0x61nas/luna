@@ -10,6 +10,7 @@
 #include <QWebEngineScript>
 #include <QWebEngineScriptCollection>
 #include <QUrl>
+#include <QUrlQuery>
 #include <QKeyEvent>
 #include <QTabBar>
 #include <QLabel>
@@ -38,6 +39,7 @@
 #include <unordered_map>
 #include <regex>
 #include <memory>
+#include <array>
 
 #define LUNA_FAIL(fmt, ...) \
     do { \
@@ -78,6 +80,7 @@ const char* LUNA_NEW_TAB_URL = "luna:newtab";
 const char* DEFAULT_PAGE_URL = LUNA_NEW_TAB_URL;
 const char* THE_DEFAULT_SEARCH_ENGINE = "https://duckduckgo.com/?q=";
 const char* LUNA_NEW_TAB_PAGE_PATH = "newtab.html";
+constexpr const size_t TAB_RESTORE_MAX_COUNT = 10;
 
 // globals :3
 char* new_tab_raw;
@@ -468,6 +471,17 @@ struct TabBody: QWidget {
         return this->val.splitter->count() == 0;
     }
 
+};
+
+struct TabRestoreState {
+    QString url;
+    QPointF scroll_position;
+    QString search_term;
+    int tab_index;
+
+    bool is_valid() const {
+        return !url.isEmpty();
+    }
 };
 
 static QWebEngineScript makeFModeScript() {
@@ -1481,6 +1495,8 @@ struct LunaBrowser: QMainWindow {
     QStringListModel *completer_model;
     QListView *completer_popup;
     QStringList base_commands;
+    std::array<TabRestoreState, TAB_RESTORE_MAX_COUNT> restore_states;
+    unsigned int restore_count = 0;
 
     QString last_error;
     QTimer *error_timer;
@@ -1796,6 +1812,32 @@ struct LunaBrowser: QMainWindow {
     void close_tab(const unsigned int idx) {
         if (this->tabs_count == 1) this->new_tab(this->profile.web_engine_profile, DEFAULT_PAGE_URL, false);
         QWidget *w = this->tabs->widget(idx);
+        // Save tab state for restoring
+        if (auto *tab_body = dynamic_cast<TabBody*>(w)) {
+            if (auto *v = tab_body->active_veiw()) {
+                TabRestoreState state;
+                state.url = v->url().toString();
+                state.scroll_position = v->page()->scrollPosition();
+                state.tab_index = idx;
+                // Extract search term if it's a search engine URL
+                QString url_str = state.url;
+                if (url_str.contains("?q=")) {
+                    QUrl url(url_str);
+                    QUrlQuery query(url);
+                    state.search_term = query.queryItemValue("q");
+                }
+                if (state.is_valid()) {
+                    // Shift existing entries to the right
+                    if (this->restore_count < TAB_RESTORE_MAX_COUNT) {
+                        this->restore_count++;
+                    }
+                    for (unsigned int i = this->restore_count - 1; i > 0; i--) {
+                        this->restore_states[i] = this->restore_states[i - 1];
+                    }
+                    this->restore_states[0] = state;
+                }
+            }
+        }
         this->tabs->removeTab(idx);
         this->tabs_count -= 1;
         delete w;
@@ -1833,8 +1875,14 @@ struct LunaBrowser: QMainWindow {
         if (mods & Qt::ControlModifier) {
             bool handled = false;
             switch (key) {
-                case Qt::Key_T: { // ctrl+t
-                    this->new_tab(this->profile.web_engine_profile);
+                case Qt::Key_T: {
+                    if ((mods & Qt::ShiftModifier) && !(mods & (Qt::AltModifier | Qt::MetaModifier))) {
+                        // ctrl+shift+t: restore latest closed tab
+                        this->reopen_latest_tab();
+                    } else {
+                        // ctrl+t: new tab
+                        this->new_tab(this->profile.web_engine_profile);
+                    }
                     handled = true;
                 } break;
                 case Qt::Key_W: { // ctrl+w
@@ -2010,7 +2058,26 @@ struct LunaBrowser: QMainWindow {
     }
 
     void reopen_latest_tab() {
-
+        if (this->restore_count == 0) return;
+        TabRestoreState state = this->restore_states[0];
+        // Shift remaining entries left
+        for (unsigned int i = 0; i < this->restore_count - 1; i++) {
+            this->restore_states[i] = this->restore_states[i + 1];
+        }
+        this->restore_count--;
+        const QString url = state.url;
+        auto *tab_body = this->new_tab(this->profile.web_engine_profile, url.toStdString().c_str(), false);
+        if (auto *v = tab_body->active_veiw()) {
+            // Restore scroll position after page loads
+            QObject::connect(v, &QWebEngineView::loadFinished, this, [v, state]() {
+                v->page()->runJavaScript(QString("window.scrollTo(%1, %2);")
+                    .arg(state.scroll_position.x())
+                    .arg(state.scroll_position.y()));
+            });
+        }
+        // Switch to the restored tab
+        int new_idx = this->tabs->count() - 1;
+        this->tabs->setCurrentIndex(new_idx);
     }
 
     bool run_cmd(const BrowserCommands command, const QString &args) {
