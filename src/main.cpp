@@ -1700,7 +1700,24 @@ struct LunaBrowser: QMainWindow {
             }
             switch(request.destination()) {
                 case QWebEngineNewWindowRequest::InNewWindow: {
-                    // TODO(anas): open new window
+                    // Create a new browser window
+                    LunaBrowser* new_browser = new LunaBrowser(this->opts, this->profile, this->adblocker);
+                    new_browser->setAttribute(Qt::WA_DeleteOnClose);
+                    // Set the requested URL to load in the new window
+                    QString requested_url = request.requestedUrl().toString();
+                    new_browser->opts.urls.push_back(requested_url.toStdString());
+                    // Prepare and show the new browser
+                    new_browser->prepare();
+                    new_browser->show();
+                    // Notify the request about the page to open in
+                    if (new_browser->tabs->count() > 0) {
+                        TabBody* first_tab = dynamic_cast<TabBody*>(new_browser->tabs->widget(0));
+                        if (first_tab) {
+                            if (QWebEngineView* view = first_tab->active_veiw()) {
+                                request.openIn(view->page());
+                            }
+                        }
+                    }
                 } break;
                 case QWebEngineNewWindowRequest::InNewTab: {
                     auto *tb= this->new_tab(profile);
