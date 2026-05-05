@@ -1745,7 +1745,11 @@ struct LunaBrowser: QMainWindow {
                     request.openIn(dialog_view->page());
                 } break;
                 case QWebEngineNewWindowRequest::InNewBackgroundTab: {
-                    // TODO(anas): In a tab of the same window, without hiding the currently visible web engine view.
+                    // New tab in the same window, without switching to it
+                    auto *tb = this->new_tab(profile, DEFAULT_PAGE_URL, false);
+                    if (QWebEngineView* view = tb->active_veiw()) {
+                        request.openIn(view->page());
+                    }
                 } break;
             }
         });
