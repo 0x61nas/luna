@@ -1724,7 +1724,25 @@ struct LunaBrowser: QMainWindow {
                     if (auto* v = tb->active_veiw()) request.openIn(v->page());
                 } break;
                 case QWebEngineNewWindowRequest::InNewDialog: {
-                    //TODO(anas): In a window without a tab bar,toolbar, or URL bar.
+                    // Minimal window without tab bar, toolbar, or URL bar
+                    QMainWindow* dialog_window = new QMainWindow();
+                    dialog_window->setAttribute(Qt::WA_DeleteOnClose);
+                    dialog_window->setWindowTitle("Luna Dialog");
+                    
+                    QWebEngineView* dialog_view = new QWebEngineView(profile, dialog_window);
+                    if (this->opts.no_js) {
+                        dialog_view->settings()->setAttribute(QWebEngineSettings::JavascriptEnabled, false);
+                    }
+                    if (this->opts.force_darkmode) {
+                        dialog_view->settings()->setAttribute(QWebEngineSettings::ForceDarkMode, true);
+                    }
+                    
+                    dialog_window->setCentralWidget(dialog_view);
+                    QUrl requested_url = request.requestedUrl();
+                    dialog_view->load(requested_url.isEmpty() ? QUrl(DEFAULT_PAGE_URL) : requested_url);
+                    dialog_window->show();
+                    
+                    request.openIn(dialog_view->page());
                 } break;
                 case QWebEngineNewWindowRequest::InNewBackgroundTab: {
                     // TODO(anas): In a tab of the same window, without hiding the currently visible web engine view.
