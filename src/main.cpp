@@ -44,6 +44,24 @@
         std::print(fmt "\n", __VA_ARGS__); \
     } while (0)
 
+#ifdef LUNA_DEBUG_BUILD
+struct AllocationMetrics {
+    uint32_t total_allocated = 0;
+    uint32_t total_freed = 0;
+
+    uint32_t current_usage() { return total_allocated - total_freed; }
+};
+static AllocationMetrics allocation_metrics;
+void* operator new(size_t size) {
+    allocation_metrics.total_allocated += size;
+    return malloc(size);
+}
+void operator delete(void* mem, size_t size) {
+    allocation_metrics.total_freed += size;
+    free(mem);
+}
+#endif // LUNA_DEBUG_BUILD
+
 const char* LUNA_VERSION = "v1.0";
 const char* THIS_BROWSER_NAME = "luna";
 // const char* DEFAULT_PAGE_URL = "https://start.duckduckgo.com";
@@ -1751,6 +1769,7 @@ void print_help(const char *bin) {
     );
 }
 
+#ifndef LUNA_TESTING
 int main(int argc, char *argv[]) {
     register_luna_scheme();   // MUST be first
     QApplication app(argc, argv);  // MUST be first Qt thing
@@ -1965,5 +1984,14 @@ int main(int argc, char *argv[]) {
     browser.prepare();
     browser.show();
 
-    return app.exec();
+    const int ret = app.exec();
+
+#ifdef LUNA_DEBUG_BUILD
+    LUNA_LOG("The total allocated memory over the browser runtime: {} bytes", allocation_metrics.total_allocated);
+    LUNA_LOG("The total freed memory over the browser runtime: {} bytes", allocation_metrics.total_freed);
+    LUNA_LOG("Current heap useage: {} bytes", allocation_metrics.current_usage());
+#endif // LUNA_DEBUG_BUILD
+
+    return ret;
 }
+#endif // LUNA_TESTING
