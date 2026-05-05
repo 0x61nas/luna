@@ -70,7 +70,7 @@ void operator delete(void* mem, size_t size) {
 #endif // LUNA_DEBUG_BUILD
 
 const char* LUNA_VERSION = "v1.0";
-const char* THIS_BROWSER_NAME = "luna";
+const char* THIS_BROWSER_NAME = "luna-browser";
 // const char* DEFAULT_PAGE_URL = "https://start.duckduckgo.com";
 // const char* DEFAULT_PAGE_URL = "https://thatsillyman.win";
 constexpr const char* LUNA_PREFEX = "luna"; // the prefex used for spiceal domains e.g. luna:newtab.
