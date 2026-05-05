@@ -22,6 +22,10 @@
 #include <QWebEngineUrlRequestInterceptor>
 #include <QWebEngineUrlRequestInfo>
 #include <QBuffer>
+#include <QCompleter>
+#include <QStringListModel>
+#include <QListView>
+#include <QTimer>
 #include <print>
 #include <string>
 #include <cstdlib>
@@ -212,6 +216,7 @@ static size_t curl_write_cb(void* ptr, size_t size, size_t nmemb, void* userdata
 }
 
 typedef enum {
+    UnknownCommand,
     NewTabComamand,
     NewPrivateTabCommand,
     CloseTabCommand,
@@ -1379,7 +1384,6 @@ struct LunaBrowserProfile {
     QWebEngineProfile *web_engine_profile;
 
     LunaBrowserProfile(std::filesystem::path profile_base, char* name, LunaAdBlocker& adblocker, bool disable_adblocker = false) : name(name) {
-        this->name = name;
         LunaBrowserHistory history(profile_base / "history");
         this->history = history;
         LunaBrowserBookmarks bookmarks(profile_base / "bookmarks");
@@ -1415,11 +1419,41 @@ struct LunaBrowser: QMainWindow {
     LunaBrowserOptions opts;
     LunaBrowserProfile profile;
     LunaAdBlocker& adblocker;
+    QLineEdit *user_input; // command/search
+    QCompleter *completer;
+    QStringListModel *completer_model;
+    QListView *completer_popup;
+    QStringList base_commands;
+
+    QString last_error;
+    QTimer *error_timer;
+    QLabel *error_label;
+    QStringList command_history;
+    int history_index;
+    QString saved_input;
 
     void update_mode(const BrowserMode m) {
         this->mode = m;
         this->status_bar->update_mode(m);
         // QApplication::processEvents(); // in case we neede to change ui from a none ui thread
+
+        if (m == BrowserMode::CommandMode) {
+            this->error_label->setVisible(false);
+            this->error_timer->stop();
+            this->user_input->setVisible(true);
+            this->user_input->setFocus();
+            this->user_input->setText(":");
+            this->user_input->setCursorPosition(1);
+            this->history_index = -1;
+            this->saved_input.clear();
+            this->completer_model->setStringList(this->base_commands);
+            QTimer::singleShot(0, this, [this]() {
+                this->completer->complete();
+            });
+        } else {
+            this->user_input->setVisible(false);
+            this->user_input->clear();
+        }
     }
 
     LunaBrowser(const LunaBrowserOptions opts, const LunaBrowserProfile profile, LunaAdBlocker& adblocker): opts(opts), profile(profile), adblocker(adblocker) {
@@ -1435,8 +1469,81 @@ struct LunaBrowser: QMainWindow {
         this->tabs->tabBar()->setExpanding(true); // each tab want to take all the available space
 
         this->status_bar = new StatusBar();
-        
+
+        this->user_input = new QLineEdit(this);
+        this->user_input->setVisible(false);
+        this->user_input->setStyleSheet(
+            "QLineEdit {"
+            "  background: #282828;"
+            "  color: #ebdbb2;"
+            "  border: none;"
+            "  padding: 4px;"
+            "}"
+        );
+
+        this->completer_model = new QStringListModel(this);
+        this->base_commands = QStringList({
+            "o", "open", "tabopen", "back", "forward", "reload", "stop",
+            "quit", "q", "wq", "undo", "redo", "yank", "paste",
+            "tabnew", "tabclose", "tabnext", "tabprev",
+            "scroll", "scrollpage", "search", "nohlsearch",
+            "bookmark-add", "bookmark-del", "bookmark-list",
+            "history", "download", "adblock-enable", "adblock-disable",
+            "set", "bind", "unbind", "help",
+        });
+        this->completer_model->setStringList(this->base_commands);
+
+        this->completer = new QCompleter(this->completer_model, this);
+        this->completer->setCaseSensitivity(Qt::CaseInsensitive);
+        this->completer->setCompletionMode(QCompleter::PopupCompletion);
+
+        this->completer_popup = new QListView();
+        this->completer_popup->setStyleSheet(
+            "QListView {"
+            "  background: #282828;"
+            "  color: #ebdbb2;"
+            "  border: none;"
+            "  outline: none;"
+            "}"
+            "QListView::item:selected {"
+            "  background: #3c3836;"
+            "  color: #ebdbb2;"
+            "}"
+        );
+        this->completer->setPopup(this->completer_popup);
+
+        this->user_input->setCompleter(this->completer);
+        this->user_input->installEventFilter(this);
+
+        this->error_label = new QLabel(this);
+        this->error_label->setStyleSheet("background: #cc241d; color: #ebdbb2; padding: 4px; font-weight: bold;");
+        this->error_label->setVisible(false);
+        this->error_label->setMinimumHeight(24);
+
+        this->error_timer = new QTimer(this);
+        this->error_timer->setSingleShot(true);
+        QObject::connect(this->error_timer, &QTimer::timeout, this, [this]() {
+            this->error_label->setVisible(false);
+        });
+
+        this->history_index = -1;
+        this->saved_input.clear();
+
+        QObject::connect(this->user_input, &QLineEdit::returnPressed, this, [this]() {
+            QString text = this->user_input->text();
+            if (!text.isEmpty() && text.startsWith(":")) {
+                this->command_history.append(text);
+            }
+            this->handle_input_command(text);
+        });
+
+        // QObject::connect(this->user_input, &QLineEdit::textChanged, this, [this](const QString &text) {
+            // this->update_completions(text);
+        // });
+
         vbox->addWidget(this->tabs, 1);
+        vbox->addWidget(this->user_input, 0);
+        vbox->addWidget(this->error_label, 0);
         vbox->addWidget(this->status_bar, 0);
         this->setCentralWidget(central);
 
@@ -1630,7 +1737,7 @@ struct LunaBrowser: QMainWindow {
                 case Qt::Key_H: v->back(); break;
                 case Qt::Key_L: v->forward(); break;
                 case Qt::Key_R: v->reload(); break;
-                case Qt::Key_D: this->close_selected_veiw(this->tabs->currentIndex()); break; 
+                case Qt::Key_D: this->close_selected_veiw(this->tabs->currentIndex()); break;
                 case Qt::Key_I: this->update_mode(BrowserMode::InsertMode); break;
                 case Qt::Key_U: this->reopen_latest_tab(); break;
                 case Qt::Key_F: {
@@ -1654,10 +1761,13 @@ struct LunaBrowser: QMainWindow {
                     }
                 } break;
                 case Qt::Key_Colon:
-                case Qt::Key_Semicolon: {
-                    this->update_mode(BrowserMode::CommandMode);
-                    // this->show_command_prompt();
-                } break;
+                case Qt::Key_Semicolon: this->update_mode(BrowserMode::CommandMode); break;
+                case Qt::Key_Escape:
+                    if (this->error_label->isVisible()) {
+                        this->error_label->setVisible(false);
+                        this->error_timer->stop();
+                    }
+                    break;
             }
             return true;
         } else {
@@ -1682,14 +1792,65 @@ struct LunaBrowser: QMainWindow {
     bool eventFilter(QObject *obj, QEvent *event) override {
         if (event->type() == QEvent::KeyPress) {
             auto *e = static_cast<QKeyEvent*>(event);
+
+            // Handle Tab completion when input is visible and focused
+            if (obj == this->user_input && this->user_input->isVisible()) {
+                if (e->key() == Qt::Key_Tab) {
+                    if (this->completer->popup()->isVisible()) {
+                        QModelIndex idx = this->completer->popup()->currentIndex();
+                        if (idx.isValid()) {
+                            this->user_input->setText(idx.data().toString());
+                            this->completer->popup()->hide();
+                        }
+                    } else {
+                        this->completer->complete();
+                    }
+                    return true;
+                }
+                if (e->key() == Qt::Key_Escape) {
+                    this->user_input->clear();
+                    this->user_input->setVisible(false);
+                    this->update_mode(BrowserMode::NormalMode);
+                    return true;
+                }
+                if (e->key() == Qt::Key_Up) {
+                    if (!this->command_history.isEmpty()) {
+                        if (this->history_index == -1) {
+                            this->saved_input = this->user_input->text();
+                            this->history_index = this->command_history.size() - 1;
+                        } else if (this->history_index > 0) {
+                            this->history_index--;
+                        }
+                        if (this->history_index >= 0) {
+                            this->user_input->setText(this->command_history[this->history_index]);
+                            this->user_input->setCursorPosition(this->user_input->text().length());
+                        }
+                    }
+                    return true;
+                }
+                if (e->key() == Qt::Key_Down) {
+                    if (this->history_index != -1) {
+                        if (this->history_index < this->command_history.size() - 1) {
+                            this->history_index++;
+                            this->user_input->setText(this->command_history[this->history_index]);
+                        } else {
+                            this->history_index = -1;
+                            this->user_input->setText(this->saved_input);
+                        }
+                        this->user_input->setCursorPosition(this->user_input->text().length());
+                    }
+                    return true;
+                }
+                return false; // let the input handle other keys
+            }
+
             return this->handle_key_press_event(e);
         } else if (event->type() == QEvent::FocusIn) {
             std::print("focus has changed in\n");
             this->on_focus();
-            return false; 
+            return false;
         } else if (event->type() == QEvent::FocusOut) {
             std::print("focus has changed out\n");
-            // Handle focus lost
             return false;
         }
 
@@ -1720,14 +1881,101 @@ struct LunaBrowser: QMainWindow {
         std::print("{}\n", msg);
     }
 
+    void show_error_notification() {
+        if (this->last_error.isEmpty()) return;
+        this->error_label->setText("Error: " + this->last_error);
+        this->error_label->setVisible(true);
+        this->error_timer->start(5000);
+    }
+
     void reopen_latest_tab() {
 
     }
 
-    bool run_cmd(const BrowserCommands command, const char* args) {
-        return false; // TODO
+    bool run_cmd(const BrowserCommands command, const QString &args) {
+        auto *v = this->active_tab() ? this->active_tab()->active_veiw() : nullptr;
+        switch (command) {
+            case BrowserCommands::QuitCommand:
+                QApplication::quit();
+                return true;
+            case BrowserCommands::OpenCommand:
+            case BrowserCommands::NewTabComamand: {
+                QString url = args.isEmpty() ? DEFAULT_PAGE_URL : args;
+                if (!url.contains("://")) url = "https://" + url;
+                this->new_tab(this->profile.web_engine_profile, url.toStdString().c_str());
+                return true;
+            }
+            case BrowserCommands::ReloadCommand:
+                if (v) { v->reload(); return true; }
+                this->last_error = "No active view to reload";
+                return false;
+            case BrowserCommands::StopCommand:
+                if (v) { v->stop(); return true; }
+                this->last_error = "No active view to stop";
+                return false;
+            case BrowserCommands::CloseTabCommand:
+                this->close_tab(this->tabs->currentIndex());
+                return true;
+            case BrowserCommands::UnknownCommand:
+                this->last_error = "Unknown command";
+                return false;
+            default:
+                this->last_error = "Command not implemented";
+                return false;
+        }
     }
 
+    void handle_input_command(const QString &text) {
+        QString cmd = text.trimmed();
+        if (cmd.isEmpty()) {
+            this->user_input->setVisible(false);
+            this->update_mode(BrowserMode::NormalMode);
+            return;
+        }
+
+        LUNA_LOG("Command: {}", cmd.toStdString());
+        if (!cmd.startsWith(":")) {
+            this->user_input->clear();
+            this->user_input->setVisible(false);
+            this->update_mode(BrowserMode::NormalMode);
+            return;
+        }
+
+        cmd = cmd.mid(1); // skip the ':'
+        QString cmd_name;
+        QString args;
+        int space_idx = cmd.indexOf(' ');
+        if (space_idx != -1) {
+            cmd_name = cmd.left(space_idx).trimmed();
+            args = cmd.mid(space_idx + 1).trimmed();
+        } else {
+            cmd_name = cmd.trimmed();
+        }
+
+        BrowserCommands browser_command = BrowserCommands::UnknownCommand;
+        if (cmd_name == "q" || cmd_name == "quit") {
+            browser_command = BrowserCommands::QuitCommand;
+        } else if (cmd_name == "o" || cmd_name == "open") {
+            browser_command = BrowserCommands::OpenCommand;
+        } else if (cmd_name == "tabopen" || cmd_name == "tabnew") {
+            browser_command = BrowserCommands::NewTabComamand;
+        } else if (cmd_name == "reload") {
+            browser_command = BrowserCommands::ReloadCommand;
+        } else if (cmd_name == "stop") {
+            browser_command = BrowserCommands::StopCommand;
+        } else if (cmd_name == "close" || cmd_name == "tabclose") {
+            browser_command = BrowserCommands::CloseTabCommand;
+        }
+
+        bool success = this->run_cmd(browser_command, args);
+        if (!success) {
+            this->show_error_notification();
+        }
+
+        this->user_input->clear();
+        this->user_input->setVisible(false);
+        this->update_mode(BrowserMode::NormalMode);
+    }
 };
 
 
