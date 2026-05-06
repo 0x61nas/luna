@@ -41,6 +41,11 @@
 #include <regex>
 #include <memory>
 #include <array>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 
 #define LUNA_FAIL(fmt, ...) \
@@ -917,14 +922,81 @@ struct LunaAdBlocker {
     std::filesystem::path timestamps_db;
     std::unordered_map<std::string, uint64_t> timestamps;
 
+    // Cache for block_request results with TTL
+    struct CacheEntry {
+        bool result;
+        std::chrono::steady_clock::time_point expires_at;
+    };
+    std::unordered_map<std::string, CacheEntry> cache;
+    std::mutex cache_mutex;
+    std::thread cleanup_thread;
+    std::atomic<bool> cleanup_running{false};
+    std::condition_variable cleanup_cv;
+    std::mutex cleanup_mutex;
+    static constexpr std::chrono::minutes CACHE_TTL{5}; // 5 minutes TTL
+
     LunaAdBlocker(const std::filesystem::path base_path) {
         this->lists_dir = base_path;
         this->timestamps_db = base_path / "timestamps_db";
         curl_global_init(CURL_GLOBAL_DEFAULT);
+        this->cleanup_running = true;
+        this->cleanup_thread = std::thread(&LunaAdBlocker::cache_cleanup_loop, this);
     }
     
     ~LunaAdBlocker() {
+        this->flush();
         curl_global_cleanup();
+    }
+
+    void flush() {
+        // Signal the cleanup thread to exit
+        bool was_running = this->cleanup_running.exchange(false);
+        if (was_running) {
+            this->cleanup_cv.notify_all();
+        }
+        // Clear the cache (before joining thread to avoid race)
+        {
+            std::lock_guard<std::mutex> lock(this->cache_mutex);
+            this->cache.clear();
+        }
+        // Now join the thread
+        if (was_running && this->cleanup_thread.joinable()) {
+            this->cleanup_thread.join();
+        }
+    }
+
+#ifdef LUNA_TESTING
+    size_t cache_size() {
+        std::lock_guard<std::mutex> lock(this->cache_mutex);
+        return this->cache.size();
+    }
+
+    void clear_cache() {
+        std::lock_guard<std::mutex> lock(this->cache_mutex);
+        this->cache.clear();
+    }
+#endif // LUNA_TESTING
+
+    void cache_cleanup_loop() {
+        std::unique_lock<std::mutex> lock(this->cleanup_mutex);
+        while (this->cleanup_running) {
+            // Wait for 50ms or until signaled to exit
+            this->cleanup_cv.wait_for(lock, std::chrono::milliseconds(50), [this]() {
+                return !this->cleanup_running;
+            });
+            
+            if (!this->cleanup_running) break;
+            
+            std::lock_guard<std::mutex> cache_lock(this->cache_mutex);
+            const auto now = std::chrono::steady_clock::now();
+            for (auto it = this->cache.begin(); it != this->cache.end(); ) {
+                if (it->second.expires_at <= now) {
+                    it = this->cache.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
     }
 
     void setup(std::initializer_list<const char*> lists) {
@@ -1257,24 +1329,51 @@ struct LunaAdBlocker {
         if (url.rfind("luna:", 0) == 0) {
             return false;
         }
-        
+
+        // Build cache key
+        std::string cache_key = std::string(url) + ":" + std::to_string(resource_type) + ":" + std::string(document_domain);
+
+        // Check cache
+        {
+            std::lock_guard<std::mutex> lock(this->cache_mutex);
+            const auto it = this->cache.find(cache_key);
+            if (it != this->cache.end()) {
+                return it->second.result; // short-circut and skip the havy lookups
+            }
+        }
+
+        // Compute result
+        bool result = false;
+        bool found = false;
         for (auto& exc : this->network_exception_rules) {
             if (exc.match(url, resource_type, document_domain)) {
 #ifdef LUNA_TESTING
                 LUNA_LOG("Ignored by rule: {}", exc.original_rule);
 #endif // LUNA_TESTING
-               return false;
-            };
-        }
-        for (auto& blk : this->network_rules) {
-            if (blk.match(url, resource_type, document_domain)) {
-#ifdef LUNA_TESTING
-                LUNA_LOG("Blocked by rule: {}", blk.original_rule);
-#endif // LUNA_TESTING
-               return true;
+               result = false;
+               found = true;
+               break;
             }
         }
-        return false;
+        if (!found) {
+            for (auto& blk : this->network_rules) {
+                if (blk.match(url, resource_type, document_domain)) {
+#ifdef LUNA_TESTING
+                    LUNA_LOG("Blocked by rule: {}", blk.original_rule);
+#endif // LUNA_TESTING
+                   result = true;
+                   break;
+                }
+            }
+        }
+
+        // Store in cache, for the next time :D
+        {
+            std::lock_guard<std::mutex> lock(this->cache_mutex);
+            auto expires_at = std::chrono::steady_clock::now() + CACHE_TTL;
+            this->cache[cache_key] = CacheEntry{result, expires_at};
+        }
+        return result;
     }
 
 };
@@ -2464,6 +2563,7 @@ int main(int argc, char *argv[]) {
         };
         adblocker.setup(default_lists);
         LUNA_LOG("Adblocker initialized with: {} network_rules, {} network_exception_rules, {}, content_rules", adblocker.network_rules.size(), adblocker.network_exception_rules.size(), adblocker.content_rules.size());
+#if 0
         // Debug: print loaded rules
         LUNA_LOG("{}", "=== Loaded Network Rules ===");
         for (const auto& rule : adblocker.network_rules) {
@@ -2477,6 +2577,7 @@ int main(int argc, char *argv[]) {
         for (const auto& rule : adblocker.content_rules) {
             LUNA_LOG("  [Content] pattern='{}' selector='{}'", rule.pattern, rule.selector);
         }
+#endif
     }
 
     LunaBrowserProfile profile(path, profile_name, adblocker, opts.disable_adblocker);
@@ -2493,6 +2594,7 @@ int main(int argc, char *argv[]) {
     LUNA_LOG("Current heap useage: {} bytes", allocation_metrics.current_usage());
 #endif // LUNA_DEBUG_BUILD
 
+    adblocker.flush();
     return ret;
 }
 #endif // LUNA_TESTING
