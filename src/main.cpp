@@ -1807,8 +1807,6 @@ struct LunaBrowser: QMainWindow {
                 if (current_idx == this->tabs->currentIndex()) {
                     auto *tab_body = dynamic_cast<TabBody*>(web_engine_view->parentWidget());
                     if (tab_body) {
-                        qint64 elapsed = tab_body->load_timer.elapsed();
-                        this->status_bar->set_load_time(QString("%1ms").arg(elapsed));
                         tab_body->load_timer.restart();
                     }
                 }
@@ -1817,8 +1815,16 @@ struct LunaBrowser: QMainWindow {
             const auto current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
             if (current_idx == this->tabs->currentIndex()) {
                 auto *tab_body = dynamic_cast<TabBody*>(web_engine_view->parentWidget());
-                qint64 elapsed = tab_body->load_timer.elapsed();
-                this->status_bar->set_load_time(QString("%1ms").arg(elapsed));
+                const qint64 elapsed = tab_body->load_timer.elapsed();
+                QString text;
+                if (elapsed < 1000) {
+                    text = QString("%1ms").arg(elapsed);
+                } else if (elapsed < 60000) {
+                    text = QString("%1sec").arg(elapsed / 1000.0, 0, 'f', 2);
+                } else {
+                    text = QString("%1min").arg(elapsed / 60000.0, 0, 'f', 2);
+                }
+                this->status_bar->set_load_time(text);
                 this->status_bar->set_progress(progress);
             }
         });
