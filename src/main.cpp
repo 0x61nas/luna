@@ -83,10 +83,11 @@ const char* DEFAULT_PAGE_URL = LUNA_NEW_TAB_URL;
 const char* THE_DEFAULT_SEARCH_ENGINE = "https://duckduckgo.com/?q=";
 const char* LUNA_NEW_TAB_PAGE_PATH = "newtab.html";
 constexpr const size_t TAB_RESTORE_MAX_COUNT = 10;
+constexpr const size_t THE_ZERO = 0; // just aa it should be.
 
 // globals :3
 char* new_tab_raw;
-unsigned long total_blocked_ads = 0;
+uint64_t total_blocked_ads = 0;
 
 #if defined(_WIN32)
 #define PATH_SEP '\\'
@@ -472,7 +473,7 @@ struct TabBody: QWidget {
         auto w = this->active_veiw();
         w->setParent(nullptr);
         w->deleteLater();
-        return this->val.splitter->count() == 0;
+        return this->val.splitter->count() == THE_ZERO;
     }
 
 };
@@ -1499,8 +1500,8 @@ struct LunaBrowser: QMainWindow {
     QStringListModel *completer_model;
     QListView *completer_popup;
     QStringList base_commands;
-    std::array<TabRestoreState, TAB_RESTORE_MAX_COUNT> restore_states;
-    size_t restore_count = 0;
+    std::array<TabRestoreState, TAB_RESTORE_MAX_COUNT> recent_restore_states{};
+    size_t restore_count = THE_ZERO; // number of entries in the queue
 
     QString last_error;
     QTimer *error_timer;
@@ -1847,28 +1848,27 @@ struct LunaBrowser: QMainWindow {
                 state.url = v->url().toString();
                 state.scroll_position = v->page()->scrollPosition();
                 state.tab_index = idx;
-                // Extract search term if it's a search engine URL
-                QString url_str = state.url;
-                if (url_str.contains("?q=")) {
-                    QUrl url(url_str);
-                    QUrlQuery query(url);
-                    state.search_term = query.queryItemValue("q");
-                }
+                state.search_term = tab_body->search_term;
                 if (state.is_valid()) {
-                    // Shift existing entries to the right
                     if (this->restore_count < TAB_RESTORE_MAX_COUNT) {
+                        // Shift all existing entries right to make room at index 0
+                        for (size_t i = this->restore_count; i > 0; i--) {
+                            this->recent_restore_states[i] = this->recent_restore_states[i - 1];
+                        }
                         this->restore_count++;
+                    } else {
+                        // Array is full, shift right dropping the oldest at the end
+                        for (size_t i = TAB_RESTORE_MAX_COUNT - 1; i > 0; i--) {
+                            this->recent_restore_states[i] = this->recent_restore_states[i - 1];
+                        }
                     }
-                    for (size_t i = this->restore_count - 1; i > 0; i--) {
-                        this->restore_states[i] = this->restore_states[i - 1];
-                    }
-                    this->restore_states[0] = state;
+                    this->recent_restore_states[THE_ZERO] = state;
                 }
             }
         }
         this->tabs->removeTab(idx);
         this->tabs_count -= 1;
-        delete w;
+        delete w; // dont eat memory :)
     }
 
     void close_selected_veiw(const size_t idx) {
@@ -2110,21 +2110,30 @@ struct LunaBrowser: QMainWindow {
     }
 
     void reopen_latest_tab() {
-        if (this->restore_count == 0) return;
-        TabRestoreState state = this->restore_states[0];
-        // Shift remaining entries left
+        if (this->restore_count == THE_ZERO) return;
+        TabRestoreState state = this->recent_restore_states[THE_ZERO];
+        // Shift remaining entries left (entry at index 1 becomes index 0, etc.)
         for (size_t i = 0; i < this->restore_count - 1; i++) {
-            this->restore_states[i] = this->restore_states[i + 1];
+            this->recent_restore_states[i] = this->recent_restore_states[i + 1];
         }
         this->restore_count--;
         const QString url = state.url;
         auto *tab_body = this->new_tab(this->profile.web_engine_profile, url.toStdString().c_str(), false);
         if (auto *v = tab_body->active_veiw()) {
-            // Restore scroll position after page loads
-            QObject::connect(v, &QWebEngineView::loadFinished, this, [v, state]() {
+            // Restore scroll position and search term after page loads
+            QObject::connect(v, &QWebEngineView::loadFinished, this, [v, state, tab_body, this]() {
+                // Restore scroll position
                 v->page()->runJavaScript(QString("window.scrollTo(%1, %2);")
                     .arg(state.scroll_position.x())
                     .arg(state.scroll_position.y()));
+                // Restore search term if present
+                if (!state.search_term.isEmpty()) {
+                    // LUNA_LOG("Perform search for {}", state.search_term.toStdString());
+                    tab_body->search_term = state.search_term;
+                    v->page()->findText(state.search_term, QWebEnginePage::FindFlags(), [this, tab_body](const QWebEngineFindTextResult &result) {
+                        // TODO(anas): are we intrested in the result.count?
+                    });
+                }
             });
         }
         // Switch to the restored tab
