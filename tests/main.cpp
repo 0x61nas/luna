@@ -6,9 +6,11 @@
 #include <string>
 #include <cstring>
 #include <unistd.h>
+#include <thread>
 
 int test_easylist_samples();
 int test_str2u64();
+int test_cache();
 
 #define LUNA_TEST_ASSERT(cond) \
     do { \
@@ -40,6 +42,9 @@ int run_tests() {
     printf("\nTesting real easylist samples...\n");
     failed_tests += test_easylist_samples();
 
+    printf("\nTesting cache functionality...\n");
+    failed_tests += test_cache();
+
     return failed_tests;
 }
 
@@ -67,5 +72,44 @@ int test_str2u64() {
     LUNA_TEST_ASSERT(str2u64("0") == 0);
     LUNA_TEST_ASSERT(str2u64("12345") == 12345);
     LUNA_TEST_ASSERT(str2u64("18446744073709551615") == UINT64_MAX);
+    return luna_failed_tests;
+}
+
+int test_cache() {
+    int luna_failed_tests = 0;
+    LunaAdBlocker ab(std::filesystem::path("not_used"));
+    ab.parse_list_file("tests/easylist.txt");
+    ab.clear_cache();
+
+    // Test 1: Cache miss on first request
+    printf("Test 1: Cache miss on first request...\n");
+    LUNA_TEST_ASSERT(ab.cache_size() == 0);
+    bool result1 = ab.block_request("https://googleads.g.doubleclick.net/pagead/id");
+    LUNA_TEST_ASSERT(result1 == true);
+    LUNA_TEST_ASSERT(ab.cache_size() == 1);
+
+    // Test 2: Cache hit on second request
+    printf("Test 2: Cache hit on second request...\n");
+    bool result2 = ab.block_request("https://googleads.g.doubleclick.net/pagead/id");
+    LUNA_TEST_ASSERT(result2 == true);
+    LUNA_TEST_ASSERT(ab.cache_size() == 1);  // Still 1, not 2
+
+    // Test 3: Different URL should miss cache
+    printf("Test 3: Different URL should miss cache...\n");
+    bool result3 = ab.block_request("https://thatsillyman.win");
+    LUNA_TEST_ASSERT(result3 == false);
+    LUNA_TEST_ASSERT(ab.cache_size() == 2);
+
+    // Test 4: Test cache with resource type and document domain
+    printf("Test 4: Cache with resource type and document domain...\n");
+    bool result4 = ab.block_request("https://googleads.g.doubleclick.net/pagead/id", 1 << 0, "example.com");
+    LUNA_TEST_ASSERT(result4 == true);
+    LUNA_TEST_ASSERT(ab.cache_size() == 3);  // Different key due to different params
+
+    // Test 5: Flush should clear cache and stop thread
+    printf("Test 5: Flush clears cache and stops thread...\n");
+    ab.flush();
+    LUNA_TEST_ASSERT(ab.cache_size() == 0);
+
     return luna_failed_tests;
 }
