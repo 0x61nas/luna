@@ -23,6 +23,7 @@
 #include <QWebEngineSettings>
 #include <QWebEngineUrlRequestInterceptor>
 #include <QWebEngineUrlRequestInfo>
+#include <QWebEngineFindTextResult>
 #include <QBuffer>
 #include <QCompleter>
 #include <QStringListModel>
@@ -400,6 +401,8 @@ struct TabBody: QWidget {
         QWebEngineView *view;
     } val;
     QElapsedTimer load_timer;
+    QString search_term;
+    // QWebEngineFindTextResult *find_result;
 
     TabBody(QWebEngineView *v) {
         auto *layout = new QVBoxLayout(this);
@@ -1523,6 +1526,13 @@ struct LunaBrowser: QMainWindow {
             QTimer::singleShot(0, this, [this]() {
                 this->completer->complete();
             });
+        } else if (m == BrowserMode::SearchMode) {
+            this->error_label->setVisible(false);
+            this->error_timer->stop();
+            this->user_input->setVisible(true);
+            this->user_input->setFocus();
+            this->user_input->clear();
+            this->user_input->setPlaceholderText("Search...");
         } else {
             this->user_input->setVisible(false);
             this->user_input->clear();
@@ -1604,10 +1614,27 @@ struct LunaBrowser: QMainWindow {
 
         QObject::connect(this->user_input, &QLineEdit::returnPressed, this, [this]() {
             QString text = this->user_input->text();
-            if (!text.isEmpty()) {
-                this->command_history.append(text);
+            if (this->mode == BrowserMode::SearchMode) {
+                // Perform search in current tab
+                if (auto *tab_body = this->active_tab()) {
+                    if (auto *v = tab_body->active_veiw()) {
+                        tab_body->search_term = text;
+                        v->page()->findText(text, QWebEnginePage::FindFlags(), [this, tab_body](const QWebEngineFindTextResult &result) {
+                            // tab_body->find_result = &result;
+                            // this->status_bar->set_search_result(QString("(%1/%2)")
+                                // .arg(result.activeMatch())
+                                // .arg(result.numberOfMatches()));
+                        });
+                    }
+                }
+                this->user_input->setVisible(false);
+                this->update_mode(BrowserMode::NormalMode);
+            } else {
+                if (!text.isEmpty()) {
+                    this->command_history.append(text);
+                }
+                this->handle_input_command(text);
             }
-            this->handle_input_command(text);
         });
 
         // QObject::connect(this->user_input, &QLineEdit::textChanged, this, [this](const QString &text) {
@@ -1910,6 +1937,26 @@ struct LunaBrowser: QMainWindow {
                 case Qt::Key_D: this->close_selected_veiw(this->tabs->currentIndex()); break;
                 case Qt::Key_I: this->update_mode(BrowserMode::InsertMode); break;
                 case Qt::Key_U: this->reopen_latest_tab(); break;
+                case Qt::Key_Slash: this->update_mode(BrowserMode::SearchMode); break;
+                case Qt::Key_N: {
+                    // N: next search result, Shift+N: previous search result
+                    if (auto *tab_body = this->active_tab()) {
+                        if (!tab_body->search_term.isEmpty()) {
+                            QWebEnginePage::FindFlags flags;
+                            if (mods & Qt::ShiftModifier) {
+                                flags = QWebEnginePage::FindBackward;
+                            } else {
+                                flags = QWebEnginePage::FindFlags();
+                            }
+                            tab_body->active_veiw()->page()->findText(tab_body->search_term, flags, [this, tab_body](const QWebEngineFindTextResult &result) {
+                                // tab_body->find_result = &result;
+                                // this->status_bar->set_search_result(QString("(%1/%2)")
+                                    // .arg(result.activeMatch())
+                                    // .arg(result.numberOfMatches()));
+                            });
+                        }
+                    }
+                } break;
                 case Qt::Key_F: {
                     this->update_mode(BrowserMode::CaretMode);
                     v->page()->runJavaScript("window.__fmode_start && window.__fmode_start();");
@@ -1933,7 +1980,11 @@ struct LunaBrowser: QMainWindow {
                 case Qt::Key_Colon:
                 case Qt::Key_Semicolon: this->update_mode(BrowserMode::CommandMode); break;
                 case Qt::Key_Escape: {
-                    if (this->error_label->isVisible()) {
+                    if (this->mode == BrowserMode::SearchMode) {
+                        this->user_input->clear();
+                        this->user_input->setVisible(false);
+                        this->update_mode(BrowserMode::NormalMode);
+                    } else if (this->error_label->isVisible()) {
                         this->error_label->setVisible(false);
                         this->error_timer->stop();
                     }
