@@ -40,6 +40,7 @@
 #include <regex>
 #include <memory>
 #include <array>
+#include <cstddef>
 
 #define LUNA_FAIL(fmt, ...) \
     do { \
@@ -65,7 +66,7 @@ void* operator new(size_t size) {
     allocation_metrics.total_allocated += size;
     return malloc(size);
 }
-void operator delete(void* mem, size_t size) {
+void operator delete(void* mem, size_t size) noexcept {
     allocation_metrics.total_freed += size;
     free(mem);
 }
@@ -225,9 +226,9 @@ static size_t curl_write_cb(void* ptr, size_t size, size_t nmemb, void* userdata
 static bool check_valid_url(const QString &str) {
     // Simple check: has dot and no spaces, or has protocol
     const QChar *data = str.data();
-    int len = str.length();
+    size_t len = str.length();
     bool has_dot = false;
-    for (int i = 0; i < len; i++) {
+    for (size_t i = 0; i < len; i++) {
         if (data[i] == '.') has_dot = true;
         if (data[i] == ' ') return false;
     }
@@ -364,12 +365,12 @@ struct StatusBar: QWidget {
         this->url->setText(url);
     }
 
-    void set_progress(const int p) {
+    void set_progress(const size_t p) {
         this->progress->setValue(p);
         this->progress->setVisible(p > 0 && p < 100);
     }
 
-    void set_tab_index(const int current, const int total) {
+    void set_tab_index(const size_t current, const size_t total) {
         this->tab_index->setText(QString("[%1/%2]").arg(current + 1).arg(total));
     }
 
@@ -477,7 +478,7 @@ struct TabRestoreState {
     QString url;
     QPointF scroll_position;
     QString search_term;
-    int tab_index;
+    size_t tab_index;
 
     bool is_valid() const {
         return !url.isEmpty();
@@ -1370,7 +1371,7 @@ static void register_luna_scheme() {
 struct LunaBrowserHistory {
     std::filesystem::path file_path;
     std::vector<char*> entries;
-    unsigned int new_start = 0;
+    size_t new_start = 0;
 
     LunaBrowserHistory() = default;
     LunaBrowserHistory(const std::filesystem::path history_file_path) {
@@ -1415,7 +1416,7 @@ struct LunaBrowserHistory {
             return false;
         }
         const auto entries_size = this->entries.size();
-        for (unsigned int i = this->new_start;
+        for (size_t i = this->new_start;
                 i < entries_size; i++) {
             std::fprintf(file, "%s\n", this->entries[i]);
         }
@@ -1485,7 +1486,7 @@ struct LunaBrowserOptions {
 struct LunaBrowser: QMainWindow {
     BrowserMode mode = BrowserMode::NormalMode;
     QTabWidget *tabs;
-    unsigned int tabs_count = 0;
+    size_t tabs_count = 0;
     StatusBar* status_bar;
     LunaBrowserOptions opts;
     LunaBrowserProfile profile;
@@ -1496,7 +1497,7 @@ struct LunaBrowser: QMainWindow {
     QListView *completer_popup;
     QStringList base_commands;
     std::array<TabRestoreState, TAB_RESTORE_MAX_COUNT> restore_states;
-    unsigned int restore_count = 0;
+    size_t restore_count = 0;
 
     QString last_error;
     QTimer *error_timer;
@@ -1697,14 +1698,14 @@ struct LunaBrowser: QMainWindow {
         }
         auto tab_body = new TabBody(web_engine_view);
         const auto url = QUrl(tab_url);
-        const int idx = this->tabs->addTab(tab_body, "New Tab");
+        const size_t idx = this->tabs->addTab(tab_body, "New Tab");
         tab_body->load_timer.start();
         if (instantly_switch) {
             this->tabs->setCurrentIndex(idx);
         }
         // when the page dose load update the tab text
         QObject::connect(web_engine_view, &QWebEngineView::titleChanged, [web_engine_view, this](const QString &t) {
-            int current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
+            const auto current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
             if (current_idx != -1) {
                 std::print("{}: {}\n", current_idx, t.toStdString());
                 this->tabs->setTabText(current_idx, t);
@@ -1774,7 +1775,7 @@ struct LunaBrowser: QMainWindow {
         });
         // update the status bar when the tab finshes loading
         QObject::connect(web_engine_view, &QWebEngineView::loadFinished, this, [web_engine_view, this]() {
-                int current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
+                const auto current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
                 if (current_idx == this->tabs->currentIndex()) {
                     auto *tab_body = dynamic_cast<TabBody*>(web_engine_view->parentWidget());
                     if (tab_body) {
@@ -1784,8 +1785,8 @@ struct LunaBrowser: QMainWindow {
                     }
                 }
         });
-        QObject::connect(web_engine_view, &QWebEngineView::loadProgress, this, [web_engine_view, this](const int progress) {
-            int current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
+        QObject::connect(web_engine_view, &QWebEngineView::loadProgress, this, [web_engine_view, this](const size_t progress) {
+            const auto current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
             if (current_idx == this->tabs->currentIndex()) {
                 auto *tab_body = dynamic_cast<TabBody*>(web_engine_view->parentWidget());
                 qint64 elapsed = tab_body->load_timer.elapsed();
@@ -1794,10 +1795,10 @@ struct LunaBrowser: QMainWindow {
             }
         });
         QObject::connect(web_engine_view->page(), &QWebEnginePage::scrollPositionChanged, this, [web_engine_view, this](const QPointF &pos) {
-            int current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
+            const auto current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
             if (current_idx == this->tabs->currentIndex()) {
                 web_engine_view->page()->runJavaScript("Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100)", [this](const QVariant &val) {
-                    int pct = val.toInt();
+                    const int pct = val.toInt();
                     if (pct <= 0) this->status_bar->set_position("[top]");
                     else this->status_bar->set_position(QString("[%1%]").arg(pct));
                 });
@@ -1809,7 +1810,7 @@ struct LunaBrowser: QMainWindow {
         return tab_body;
     }
 
-    void close_tab(const unsigned int idx) {
+    void close_tab(const size_t idx) {
         if (this->tabs_count == 1) this->new_tab(this->profile.web_engine_profile, DEFAULT_PAGE_URL, false);
         QWidget *w = this->tabs->widget(idx);
         // Save tab state for restoring
@@ -1831,7 +1832,7 @@ struct LunaBrowser: QMainWindow {
                     if (this->restore_count < TAB_RESTORE_MAX_COUNT) {
                         this->restore_count++;
                     }
-                    for (unsigned int i = this->restore_count - 1; i > 0; i--) {
+                    for (size_t i = this->restore_count - 1; i > 0; i--) {
                         this->restore_states[i] = this->restore_states[i - 1];
                     }
                     this->restore_states[0] = state;
@@ -1843,7 +1844,7 @@ struct LunaBrowser: QMainWindow {
         delete w;
     }
 
-    void close_selected_veiw(const unsigned int idx) {
+    void close_selected_veiw(const size_t idx) {
         auto at = this->active_tab();
         if (at->tag == TabBodyStateTag::SplitedTagBodyState) {
             bool empty = at->remove_active_veiw();
@@ -2061,7 +2062,7 @@ struct LunaBrowser: QMainWindow {
         if (this->restore_count == 0) return;
         TabRestoreState state = this->restore_states[0];
         // Shift remaining entries left
-        for (unsigned int i = 0; i < this->restore_count - 1; i++) {
+        for (size_t i = 0; i < this->restore_count - 1; i++) {
             this->restore_states[i] = this->restore_states[i + 1];
         }
         this->restore_count--;
@@ -2076,7 +2077,7 @@ struct LunaBrowser: QMainWindow {
             });
         }
         // Switch to the restored tab
-        int new_idx = this->tabs->count() - 1;
+        size_t new_idx = this->tabs->count() - 1;
         this->tabs->setCurrentIndex(new_idx);
     }
 
@@ -2140,7 +2141,7 @@ struct LunaBrowser: QMainWindow {
 
         QString cmd_name;
         QString args;
-        int space_idx = cmd.indexOf(' ');
+        const auto space_idx = cmd.indexOf(' ');
         if (space_idx != -1) {
             cmd_name = cmd.left(space_idx).trimmed();
             args = cmd.mid(space_idx + 1).trimmed();
