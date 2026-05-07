@@ -929,6 +929,10 @@ struct LunaAdBlocker {
     };
     std::unordered_map<std::string, CacheEntry> cache;
     std::mutex cache_mutex;
+
+    // Simple cache for get_hiding_rules_for_domain
+    std::unordered_map<std::string, std::string> hide_cache_data;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> hide_cache_expiry;
     std::thread cleanup_thread;
     std::atomic<bool> cleanup_running{false};
     std::condition_variable cleanup_cv;
@@ -958,11 +962,81 @@ struct LunaAdBlocker {
         {
             std::lock_guard<std::mutex> lock(this->cache_mutex);
             this->cache.clear();
+            this->hide_cache_data.clear();
+            this->hide_cache_expiry.clear();
         }
         // Now join the thread
         if (was_running && this->cleanup_thread.joinable()) {
             this->cleanup_thread.join();
         }
+    }
+
+    static std::string escape_json(const std::string& s) {
+        std::string r;
+        r.reserve(s.size());
+        for (char c : s) {
+            switch (c) {
+                case '"': r += "\\\""; break;
+                case '\\': r += "\\\\"; break;
+                case '\n': r += "\\n"; break;
+                case '\r': r += "\\r"; break;
+                case '\t': r += "\\t"; break;
+                default: r += c;
+            }
+        }
+        return r;
+    }
+
+    std::string get_hiding_rules_for_domain(const std::string& domain) {
+        {
+            std::lock_guard<std::mutex> lock(this->cache_mutex);
+            auto it = this->hide_cache_expiry.find(domain);
+            if (it != this->hide_cache_expiry.end() && it->second > std::chrono::steady_clock::now()) {
+                return this->hide_cache_data[domain];
+            }
+        }
+
+        std::string result = "[";
+        bool first = true;
+        for (const auto& rule : this->content_rules) {
+            if (rule.selector.empty()) continue;
+
+            bool apply = false;
+
+            if (rule.options.domains.empty()) {
+                apply = true;
+            } else {
+                for (const auto& d : rule.options.domains) {
+                    if (domain == d || domain.ends_with("." + d)) {
+                        apply = true;
+                        break;
+                    }
+                }
+                if (apply) {
+                    for (const auto& d : rule.options.exclude_domains) {
+                        if (domain == d || domain.ends_with("." + d)) {
+                            apply = false;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (apply) {
+                if (!first) result += ",";
+                first = false;
+                result += "{\"selector\":\"" + escape_json(rule.selector) + "\"}";
+            }
+        }
+        result += "]";
+
+        {
+            std::lock_guard<std::mutex> lock(this->cache_mutex);
+            this->hide_cache_data[domain] = result;
+            this->hide_cache_expiry[domain] = std::chrono::steady_clock::now() + CACHE_TTL;
+        }
+
+        return result;
     }
 
 #ifdef LUNA_TESTING
@@ -1566,6 +1640,7 @@ struct LunaBrowserProfile {
 
         auto *web_engine_profile = new QWebEngineProfile(QString(name));
         web_engine_profile->scripts()->insert(makeFModeScript());
+        
         web_engine_profile->setCachePath((profile_base / "cache").c_str());
         web_engine_profile->installUrlSchemeHandler(LUNA_PREFEX, new LunaBrowserSchemeHandler());
         if (!disable_adblocker) {
@@ -1938,6 +2013,38 @@ struct LunaBrowser: QMainWindow {
             }
         });
         this->tabs_count += 1;
+
+        // Inject domain-specific content hide rules
+        if (!this->opts.disable_adblocker) {
+            QString domain = url.host();
+            if (!domain.isEmpty()) {
+                std::string rules_json = this->adblocker.get_hiding_rules_for_domain(domain.toStdString());
+                if (rules_json != "[]") {
+                    QWebEngineScript s;
+                    s.setName("content-hide");
+                    s.setInjectionPoint(QWebEngineScript::DocumentReady);
+                    s.setRunsOnSubFrames(true);
+                    s.setWorldId(QWebEngineScript::MainWorld);
+                    std::string js = R"JS(
+                        (function(){
+                            var rules = )JS" + rules_json + R"JS(;
+                            var css = "";
+                            for (var i = 0; i < rules.length; i++) {
+                                css += rules[i].selector + " { display: none !important; }\n";
+                            }
+                            if (css) {
+                                var style = document.createElement("style");
+                                style.textContent = css;
+                                if (document.head) document.head.appendChild(style);
+                            }
+                        })();
+                        )JS";
+                    s.setSourceCode(QString::fromStdString(js));
+                    web_engine_view->page()->scripts().insert(s);
+                }
+            }
+        }
+
         // load the url
         web_engine_view->load(url);
         return tab_body;
