@@ -1,0 +1,122 @@
+<!DOCTYPE html
+><html lang="en">
+        <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>New Tab</title>
+        <style>
+        :root {
+            --bg:#0a0b10;
+            --bg-soft:#11131a;
+            --fg:#e0e6ed;
+            --muted:#9aa3ad;
+            --accent:rgba(224,230,237,.15);
+        }
+        * { box-sizing:border-box; }
+        body {
+            margin:0;
+            font-family:system-ui,-apple-system,sans-serif;
+            background:radial-gradient(circle at top,#1a1c29,var(--bg)60%);
+            color:var(--fg);
+            display:grid;
+            place-items:center;
+            min-height:100vh;
+        }
+        .container {
+            width:100%;
+            max-width:520px;
+            padding:2rem;
+            text-align:center;
+        }
+        .moon {
+            width:64px;
+            height:64px;
+            margin:0 auto 2rem;
+            border-radius:50%;
+            background:var(--fg);
+            box-shadow:
+                0 0 30px var(--accent),
+                inset -10px -10px 18px rgba(0,0,0,.5),
+                inset 4px 4px 8px rgba(255,255,255,.7);
+        }
+        .search {
+            width:100%;
+            padding:1rem 1.4rem;
+            border-radius:999px;
+            border:1px solid rgba(255,255,255,.08);
+            background:var(--bg-soft);
+            color:var(--fg);
+            outline:0;
+            font-size:1rem;
+            transition:.2s;
+        }
+        .search::placeholder { color:var(--muted); }
+        .search:focus {
+            border-color:rgba(255,255,255,.25);
+            box-shadow:0 0 15px var(--accent);
+        }
+        .grid {
+            margin-top:2.5rem;
+            display:grid;
+            grid-template-columns:repeat(auto-fill,minmax(90px,1fr));
+            gap:1rem;
+        }
+        .item {
+            text-decoration:none;
+            color:var(--fg);
+            padding:.8rem;
+            border-radius:12px;
+            background:rgba(255,255,255,.02);
+            transition:.15s;
+        }
+        .item:hover {
+            background:rgba(255,255,255,.06);
+            transform:translateY(-2px);
+        }
+        .icon {
+            width:36px;
+            height:36px;
+            margin:0 auto .5rem;
+            border-radius:50%;
+            display:grid;
+            place-items:center;
+            background:rgba(255,255,255,.08);
+            font-size:.9rem;
+        }
+        .title {
+            font-size:.75rem;
+            color:var(--muted);
+            white-space:nowrap;
+            overflow:hidden;
+            text-overflow:ellipsis;
+        }
+        </style>
+        </head>
+        <body>
+        <div class="container">
+        <div class="moon"></div>
+        <form action="https://duckduckgo.com/">
+        <input class="search" name="q" placeholder="Search..." autofocus>
+        </form>
+        <div class="grid" id="grid"></div>
+        </div>
+        <script>
+        const s=[
+        ["Anas's Homepage","https://thatsillyman.win"],
+        ["GitHub","https://github.com"],
+        ["Kernel","https://kernel.org"],
+        ["Arch","https://wiki.archlinux.org"],
+        ["PostgreSQL","https://postgresql.org"],
+        ["HN","https://news.ycombinator.com"],
+        ["Reddit","https://reddit.com"]
+        ],g=document.getElementById("grid");
+        s.forEach(([t,u])=>{
+        const a=document.createElement("a");
+        a.href=u;
+        a.className="item";
+        a.innerHTML=`<div class="icon">${t[0]}</div><div class="title">${t}</div>`;
+        g.appendChild(a);
+        });
+        </script>
+        </body>
+  </html>

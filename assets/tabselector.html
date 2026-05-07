@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tabs</title>
+<style>
+:root {
+    --bg:#0a0b10;
+    --bg-soft:#11131a;
+    --fg:#e0e6ed;
+    --muted:#9aa3ad;
+    --accent:rgba(224,230,237,.15);
+}
+*{box-sizing:border-box}
+body{
+    margin:0;
+    font-family:system-ui,-apple-system,sans-serif;
+    background:radial-gradient(circle at top,#1a1c29,var(--bg)60%);
+    color:var(--fg);
+    display:grid;
+    place-items:center;
+    min-height:100vh;
+}
+.container{
+    width:100%;
+    max-width:700px;
+    padding:2rem;
+}
+.header{
+    text-align:center;
+    margin-bottom:2rem;
+}
+.moon{
+    width:48px;
+    height:48px;
+    margin:0 auto 1rem;
+    border-radius:50%;
+    background:var(--fg);
+    box-shadow:
+        0 0 25px var(--accent),
+        inset -8px -8px 14px rgba(0,0,0,.5),
+        inset 3px 3px 6px rgba(255,255,255,.7);
+}
+.title{
+    font-size:1.1rem;
+    color:var(--muted);
+}
+.list{
+    display:grid;
+    gap:.6rem;
+}
+.tab{
+    display:flex;
+    align-items:center;
+    gap:.8rem;
+    padding:.9rem 1rem;
+    border-radius:12px;
+    text-decoration:none;
+    color:var(--fg);
+    background:rgba(255,255,255,.02);
+    transition:.15s;
+    cursor:pointer;
+}
+.tab:hover{
+    background:rgba(255,255,255,.06);
+    transform:translateY(-1px);
+}
+.icon{
+    width:28px;
+    height:28px;
+    border-radius:50%;
+    display:grid;
+    place-items:center;
+    background:rgba(255,255,255,.08);
+    font-size:.8rem;
+    flex-shrink:0;
+}
+.text{
+    overflow:hidden;
+}
+.t{
+    font-size:.9rem;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+.u{
+    font-size:.7rem;
+    color:var(--muted);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header">
+<div class="moon"></div>
+<div class="title">Open Tabs</div>
+</div>
+<div class="list" id="list">
+  <a class="tab" href="luna:newtab">
+    <div class="icon">New Tab</div>
+    <div class="text">
+      <div class="t">New Tab</div>
+      <div class="u">luna:newtab</div>
+    </div>
+  </div>
+  </a>
+</div>
+
+<script>
+let tabs=[
+{title:"GitHub",url:"https://github.com"},
+{title:"Kernel",url:"https://kernel.org"},
+{title:"Arch Wiki",url:"https://wiki.archlinux.org"},
+{title:"PostgreSQL",url:"https://postgresql.org"},
+{title:"Hacker News",url:"https://news.ycombinator.com"},
+{title:"Reddit",url:"https://reddit.com"}
+];
+
+const list=document.getElementById("list");
+
+tabs.forEach(tab=>{
+const a=document.createElement("a");
+a.href=tab.url;
+a.className="tab";
+a.innerHTML=`
+<div class="icon">${tab.title[0]}</div>
+<div class="text">
+<div class="t">${tab.title}</div>
+<div class="u">${tab.url}</div>
+</div>`;
+list.appendChild(a);
+});
+</script>
+
+</body>
+</html>
