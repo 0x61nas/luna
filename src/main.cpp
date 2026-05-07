@@ -76,6 +76,9 @@ void* operator new(size_t size) {
     allocation_metrics.total_allocated += size;
     return malloc(size);
 }
+void operator delete(void* mem) noexcept {
+    free(mem);
+}
 void operator delete(void* mem, size_t size) noexcept {
     allocation_metrics.total_freed += size;
     free(mem);
@@ -92,10 +95,18 @@ const char* DEFAULT_PAGE_URL = LUNA_NEW_TAB_URL;
 const char* THE_DEFAULT_SEARCH_ENGINE = "https://duckduckgo.com/?q=";
 const char* LUNA_NEW_TAB_PAGE_PATH = "newtab.html";
 constexpr const size_t TAB_RESTORE_MAX_COUNT = 10;
-constexpr const size_t THE_ZERO = 69^69; // just aa it should be.
+constexpr const size_t THE_ZERO = 69^69; // just as it should be.
 
 // globals :3
-char* new_tab_raw;
+static const char NEW_TAB_EMBEDDED[] = {
+    #embed "../assets/newtab.html"
+    , 0
+};
+char* new_tab_raw = const_cast<char*>(NEW_TAB_EMBEDDED);
+static const char THE_F_MODE_JS_SCRIPT_EMBEDDED[] = {
+    #embed "../assets/fmode.js"
+    , 0
+};
 uint64_t total_blocked_ads = 0;
 
 #if defined(_WIN32)
@@ -532,95 +543,7 @@ static QWebEngineScript makeFModeScript() {
     s.setInjectionPoint(QWebEngineScript::DocumentReady);
     s.setRunsOnSubFrames(true);
     s.setWorldId(QWebEngineScript::MainWorld);
-
-    // this is the dumbest implementation possable for the fmode by the Clancker
-    s.setSourceCode(R"JS(
-        (function(){
-            if (window.__fmode_installed) return;
-            window.__fmode_installed = true;
-
-            const chars = "asdfghjklqwertyuiopzxcvbnm";
-
-            function gen2(){
-                let s="";
-                for(let i=0;i<2;i++) s+=chars[Math.floor(Math.random()*chars.length)];
-                return s;
-            }
-
-            function visible(el){
-                const r = el.getBoundingClientRect();
-                return r.width>0 && r.height>0 &&
-                       r.bottom>0 && r.right>0 &&
-                       r.top < window.innerHeight &&
-                       r.left < window.innerWidth;
-            }
-
-            function getTargets(){
-                return Array.from(document.querySelectorAll(
-                    "a,button,input,[onclick],[role=button]"
-                )).filter(visible);
-            }
-
-
-            function cleanup(){
-                window.__fmode_labels.forEach(l=>l.remove());
-                window.__fmode_active=false;
-                window.__fmode_buf="";
-                document.removeEventListener("keydown", handler, true);
-            }
-
-            function start(){
-                if (window.__fmode_active) return;
-                window.__fmode_active = true;
-
-                const els = getTargets();
-                window.__fmode_map = Object.create(null);
-                window.__fmode_labels = [];
-                window.__fmode_buf = "";
-
-                els.forEach(el=>{
-                    let key;
-                    do { key = gen2(); } while (window.__fmode_map[key]);
-
-                    const r = el.getBoundingClientRect();
-                    const d = document.createElement("div");
-                    d.textContent = key;
-                    d.style.position="fixed";
-                    d.style.left = r.left + "px";
-                    d.style.top  = r.top  + "px";
-                    d.style.background="yellow";
-                    d.style.color="black";
-                    d.style.fontSize="12px";
-                    d.style.padding="2px";
-                    d.style.zIndex=2147483647;
-
-                    document.body.appendChild(d);
-                    window.__fmode_map[key] = el;
-                    window.__fmode_labels.push(d);
-                });
-
-
-                function handler(e){
-                    if(!window.__fmode_active) return;
-
-                    if(e.key.length === 1){
-                        window.__fmode_buf += e.key.toLowerCase();
-                        if(window.__fmode_buf.length === 2){
-                            const el = window.__fmode_map[window.__fmode_buf];
-                            if(el) el.click();
-                            cleanup();
-                        }
-                        e.preventDefault();
-                    }
-                }
-
-                document.addEventListener("keydown", handler, true);
-            }
-
-            window.__fmode_start = start;
-            window.__fmode_cleanup = cleanup;
-        })();
-    )JS");
+    s.setSourceCode(THE_F_MODE_JS_SCRIPT_EMBEDDED);
     return s;
 }
 
@@ -2629,129 +2552,6 @@ int main(int argc, char *argv[]) {
             new_tab_raw[fsize] = '\0';
             std::fclose(new_tab_f);
         }
-    } else {
-        new_tab_raw = const_cast<char*>(R"HTML(<!DOCTYPE html><html lang="en">
-        <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>New Tab</title>
-        <style>
-        :root {
-            --bg:#0a0b10;
-            --bg-soft:#11131a;
-            --fg:#e0e6ed;
-            --muted:#9aa3ad;
-            --accent:rgba(224,230,237,.15);
-        }
-        * { box-sizing:border-box; }
-        body {
-            margin:0;
-            font-family:system-ui,-apple-system,sans-serif;
-            background:radial-gradient(circle at top,#1a1c29,var(--bg)60%);
-            color:var(--fg);
-            display:grid;
-            place-items:center;
-            min-height:100vh;
-        }
-        .container {
-            width:100%;
-            max-width:520px;
-            padding:2rem;
-            text-align:center;
-        }
-        .moon {
-            width:64px;
-            height:64px;
-            margin:0 auto 2rem;
-            border-radius:50%;
-            background:var(--fg);
-            box-shadow:
-                0 0 30px var(--accent),
-                inset -10px -10px 18px rgba(0,0,0,.5),
-                inset 4px 4px 8px rgba(255,255,255,.7);
-        }
-        .search {
-            width:100%;
-            padding:1rem 1.4rem;
-            border-radius:999px;
-            border:1px solid rgba(255,255,255,.08);
-            background:var(--bg-soft);
-            color:var(--fg);
-            outline:0;
-            font-size:1rem;
-            transition:.2s;
-        }
-        .search::placeholder { color:var(--muted); }
-        .search:focus {
-            border-color:rgba(255,255,255,.25);
-            box-shadow:0 0 15px var(--accent);
-        }
-        .grid {
-            margin-top:2.5rem;
-            display:grid;
-            grid-template-columns:repeat(auto-fill,minmax(90px,1fr));
-            gap:1rem;
-        }
-        .item {
-            text-decoration:none;
-            color:var(--fg);
-            padding:.8rem;
-            border-radius:12px;
-            background:rgba(255,255,255,.02);
-            transition:.15s;
-        }
-        .item:hover {
-            background:rgba(255,255,255,.06);
-            transform:translateY(-2px);
-        }
-        .icon {
-            width:36px;
-            height:36px;
-            margin:0 auto .5rem;
-            border-radius:50%;
-            display:grid;
-            place-items:center;
-            background:rgba(255,255,255,.08);
-            font-size:.9rem;
-        }
-        .title {
-            font-size:.75rem;
-            color:var(--muted);
-            white-space:nowrap;
-            overflow:hidden;
-            text-overflow:ellipsis;
-        }
-        </style>
-        </head>
-        <body>
-        <div class="container">
-        <div class="moon"></div>
-        <form action="https://duckduckgo.com/">
-        <input class="search" name="q" placeholder="Search..." autofocus>
-        </form>
-        <div class="grid" id="grid"></div>
-        </div>
-        <script>
-        const s=[
-        ["Anas's Homepage","https://thatsillyman.win"],
-        ["GitHub","https://github.com"],
-        ["Kernel","https://kernel.org"],
-        ["Arch","https://wiki.archlinux.org"],
-        ["PostgreSQL","https://postgresql.org"],
-        ["HN","https://news.ycombinator.com"],
-        ["Reddit","https://reddit.com"]
-        ],g=document.getElementById("grid");
-        s.forEach(([t,u])=>{
-        const a=document.createElement("a");
-        a.href=u;
-        a.className="item";
-        a.innerHTML=`<div class="icon">${t[0]}</div><div class="title">${t}</div>`;
-        g.appendChild(a);
-        });
-        </script>
-        </body>
-        </html>
-        )HTML");
     }
 
     if (opts.private_window) {
