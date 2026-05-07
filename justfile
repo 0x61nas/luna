@@ -6,6 +6,8 @@ CXXFLAGS := env_var_or_default('CXXFLAGS', '-fPIC -std=c++23 -Wall -Wextra')
 PFLAGS := '--cflags --libs'
 PLIBS := 'Qt6Widgets Qt6WebEngineWidgets libcurl'
 BUILD_DIR := 'build'
+SU := env_var_or_default('SU', 'su -c')
+DESTDIR := env_var_or_default('DESTDIR', '/usr/local/bin')
 
 build EXTRA_CXXFLAGS='-ggdb -O0 -DLUNA_DEBUG_BUILD':
     [[ -d {{BUILD_DIR}} ]] || mkdir -p {{BUILD_DIR}}
@@ -34,6 +36,10 @@ sanitize SANITIZER='address,undefined':
 
 download-easylist:
     curl -O https://easylist.to/easylist/easylist.txt
+
+install:
+    just build-realease
+    {{SU}} 'install -Dm755 {{BUILD_DIR}}/luna-browser {{DESTDIR}}/luna-browser'
 
 clean:
     git clean -ffdx
