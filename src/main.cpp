@@ -58,7 +58,11 @@
     do { \
         std::print(fmt "\n", __VA_ARGS__); \
     } while (0)
-
+#ifdef LUNA_DEBUG_BUILD
+#define LUNA_DEBUG(fmt, ...) LUNA_LOG(fmt, __VA_ARGS__)
+#else
+#define LUNA_DEBUG(fmt, ...) do { (void)fmt; } while (0)
+#endif // LUNA_DEBUG_BUILD
 
 #ifdef LUNA_DEBUG_BUILD
 struct AllocationMetrics {
@@ -1704,7 +1708,7 @@ struct LunaBrowserOptions {
 struct LunaBrowser: QMainWindow {
     BrowserMode mode = BrowserMode::NormalMode;
     QTabWidget *tabs;
-    size_t tabs_count = 0;
+    size_t tabs_count = THE_ZERO;
     StatusBar* status_bar;
     LunaBrowserOptions opts;
     LunaBrowserProfile profile;
@@ -1752,6 +1756,27 @@ struct LunaBrowser: QMainWindow {
             this->user_input->setVisible(false);
             this->user_input->clear();
         }
+    }
+
+    void update_tab_title(TabBody *tab_body) {
+        if (!tab_body) return;
+        auto *active = tab_body->active_veiw();
+        if (!active) return;
+        int tab_idx = this->tabs->indexOf(tab_body);
+        if (tab_idx == -1) return;
+        QString title = active->title();
+        if (title.isEmpty()) title = active->url().toString();
+        if (title.isEmpty()) title = "Luna";
+        if (tab_body->tag == TabBodyStateTag::SplitedTagBodyState && tab_body->val.splitter) {
+            int active_idx = tab_body->val.splitter->indexOf(active);
+            if (active_idx >= 0) {
+                int other_idx = (active_idx == 0) ? 1 : 0;
+                title = QString("%1|%2: %3").arg(other_idx + 1).arg(active_idx + 1).arg(title);
+            }
+        } else {
+            title = QString("%1: %2").arg(tab_idx + 1).arg(title);
+        }
+        this->tabs->setTabText(tab_idx, title);
     }
 
     LunaBrowser(const LunaBrowserOptions opts, const LunaBrowserProfile profile, LunaAdBlocker& adblocker): opts(opts), profile(profile), adblocker(adblocker) {
@@ -1886,15 +1911,20 @@ struct LunaBrowser: QMainWindow {
 
         //
         QObject::connect(this->tabs, &QTabWidget::currentChanged, [&](int idx) {
-            auto *v = dynamic_cast<TabBody*>(this->tabs->currentWidget())->active_veiw();
-            if (v) {
-                this->status_bar->set_url(v->url().toString());
-                this->status_bar->set_tab_index(idx, this->tabs->count());
-                QObject::connect(v, &QWebEngineView::urlChanged, [this](const QUrl &u) {
-                    this->status_bar->set_url(u.toString());
-                });
+            auto *tab_body = dynamic_cast<TabBody*>(this->tabs->currentWidget());
+            if (tab_body) {
+                auto *v = tab_body->active_veiw();
+                if (v) {
+                    this->status_bar->set_url(v->url().toString());
+                    this->status_bar->set_tab_index(idx, this->tabs->count());
+                    QObject::connect(v, &QWebEngineView::urlChanged, [this](const QUrl &u) {
+                        this->status_bar->set_url(u.toString());
+                    });
+                }
+                // this->update_tab_title(tab_body);
             }
         });
+
 
         QObject::connect(this->tabs, &QTabWidget::tabCloseRequested, [&](int i){
             this->close_tab(i);
@@ -1924,7 +1954,7 @@ struct LunaBrowser: QMainWindow {
     }
 
     TabBody* new_tab(QWebEngineProfile* profile, const char* tab_url = DEFAULT_PAGE_URL, const bool instantly_switch = true) {
-        LUNA_LOG("Creating a new tab for `{}`", tab_url);
+        LUNA_DEBUG("Creating a new tab for `{}`", tab_url);
         // auto *page = new QWebEnginePage()
         auto *web_engine_view = new QWebEngineView(profile);
         if (this->opts.no_js) {
@@ -1946,16 +1976,9 @@ struct LunaBrowser: QMainWindow {
             this->tabs->setCurrentIndex(idx);
         }
         // when the page dose load update the tab text
-        QObject::connect(web_engine_view, &QWebEngineView::titleChanged, [web_engine_view, this](const QString &t) {
-            auto *parent = web_engine_view->parentWidget();
-            while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
-            if (parent) {
-                const auto current_idx = this->tabs->indexOf(parent);
-                if (current_idx != -1) {
-                    std::print("{}: {}\n", current_idx, t.toStdString());
-                    this->tabs->setTabText(current_idx, t);
-                }
-            }
+        QObject::connect(web_engine_view, &QWebEngineView::titleChanged, [tab_body, web_engine_view, this](const QString &t) {
+            // std::print("{}: {}\n", this->tabs->indexOf(parent), t.toStdString());
+            this->update_tab_title(tab_body);
         });
         QObject::connect(web_engine_view->page(), &QWebEnginePage::newWindowRequested, [profile, this](QWebEngineNewWindowRequest &request) {
             if (!request.isUserInitiated()) {
@@ -2228,13 +2251,10 @@ struct LunaBrowser: QMainWindow {
                         auto *nv = new QWebEngineView(this->profile.web_engine_profile);
                         nv->load(QUrl(DEFAULT_PAGE_URL));
                         if (!tb->split(SplitHorizontallyDirection, nv)) { this->show_error("Target tab is already in split mode!"); break; }
-                        QObject::connect(nv, &QWebEngineView::titleChanged, [nv, this](const QString &t) {
+                        QObject::connect(nv, &QWebEngineView::titleChanged, [nv, this](const QString &) {
                             auto *parent = nv->parentWidget();
                             while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
-                            if (parent) {
-                                int idx = this->tabs->indexOf(parent);
-                                if (idx != -1) this->tabs->setTabText(idx, t);
-                            }
+                            if (parent) this->update_tab_title(static_cast<TabBody*>(parent));
                         });
                         this->status_bar->set_url(nv->url().toString());
                         QObject::connect(nv, &QWebEngineView::urlChanged, [this](const QUrl &u) {
@@ -2248,13 +2268,10 @@ struct LunaBrowser: QMainWindow {
                         auto *nv = new QWebEngineView(this->profile.web_engine_profile);
                         nv->load(QUrl(DEFAULT_PAGE_URL));
                         if(!tb->split(SplitVerticallyDirection, nv)) { this->show_error("Target tab is already in split mode!"); break; }
-                        QObject::connect(nv, &QWebEngineView::titleChanged, [nv, this](const QString &t) {
+                        QObject::connect(nv, &QWebEngineView::titleChanged, [nv, this](const QString &) {
                             auto *parent = nv->parentWidget();
                             while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
-                            if (parent) {
-                                int idx = this->tabs->indexOf(parent);
-                                if (idx != -1) this->tabs->setTabText(idx, t);
-                            }
+                            if (parent) this->update_tab_title(static_cast<TabBody*>(parent));
                         });
                         this->status_bar->set_url(nv->url().toString());
                         QObject::connect(nv, &QWebEngineView::urlChanged, [this](const QUrl &u) {
@@ -2352,11 +2369,11 @@ struct LunaBrowser: QMainWindow {
 
             return this->handle_key_press_event(e);
         } else if (event->type() == QEvent::FocusIn) {
-            std::print("focus has changed in\n");
+            // std::print("focus has changed in\n");
             this->on_focus();
             return false;
         } else if (event->type() == QEvent::FocusOut) {
-            std::print("focus has changed out\n");
+            // std::print("focus has changed out\n");
             return false;
         }
 
@@ -2371,9 +2388,10 @@ struct LunaBrowser: QMainWindow {
     }
 
     void on_focus() {
-        // update the status bar
         {
             auto *v = this->active_tab()->active_veiw();
+            this->update_tab_title(dynamic_cast<TabBody*>(v));
+            // update the status bar
             this->status_bar->url->setText(v->url().toString());
         }
     }
