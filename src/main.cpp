@@ -443,6 +443,8 @@ struct TabBody: QWidget {
             this->tag = TabBodyStateTag::SplitedTagBodyState;
             this->val.splitter = splitter;
             this->layout()->addWidget(splitter);
+            int total = direction == SplitHorizontallyDirection ? this->width() : this->height();
+            splitter->setSizes({total / 2, total / 2});
         }
         return true;
     }
