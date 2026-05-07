@@ -659,8 +659,28 @@ struct LunaAdBlockerRule {
         // content rule
         if (content_pos != std::string_view::npos) {
             rule.type = LunaAdBlockerRuleType::ContentHideRule;
-            rule.pattern = line.substr(i, content_pos - i);
+            auto domain_part = line.substr(i, content_pos - i);
+            rule.pattern = domain_part;
             rule.selector = line.substr(content_pos + 2);
+
+            // Parse domain restrictions from content rule prefix (comma-separated, supports ~exclude)
+            if (!domain_part.empty()) {
+                size_t pos = 0;
+                while (pos < domain_part.size()) {
+                    size_t comma = domain_part.find(',', pos);
+                    size_t end = (comma == std::string_view::npos) ? domain_part.size() : comma;
+                    auto tok = domain_part.substr(pos, end - pos);
+                    if (!tok.empty()) {
+                        if (tok[0] == '~') {
+                            rule.options.exclude_domains.push_back(std::string(tok.substr(1)));
+                        } else {
+                            rule.options.domains.push_back(std::string(tok));
+                        }
+                    }
+                    pos = (comma == std::string_view::npos) ? domain_part.size() : comma + 1;
+                }
+            }
+
             return rule;
         }
 
@@ -2664,8 +2684,10 @@ int main(int argc, char *argv[]) {
     LunaAdBlocker adblocker(std::filesystem::path(get_app_data_base()) / "adblocker");
     if (!opts.disable_adblocker) {
         const auto easylist_url = "https://easylist.to/easylist/easylist.txt";
+        const auto remove_yt_shorts = "https://raw.githubusercontent.com/brave/adblock-lists/refs/heads/master/brave-lists/yt-shorts.txt";
         const auto default_lists = {
             easylist_url,
+            remove_yt_shorts,
             // "file:///home/anas/code/luna/test_rules.txt",
         };
         adblocker.setup(default_lists);
