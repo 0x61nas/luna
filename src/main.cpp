@@ -29,7 +29,6 @@
 #include <QStringListModel>
 #include <QListView>
 #include <QTimer>
-#include <QElapsedTimer>
 #include <print>
 #include <string>
 #include <cstdlib>
@@ -413,6 +412,33 @@ struct StatusBar: QWidget {
     }
 };
 
+struct LunaBrowserElapsedTimer {
+    uint64_t start_timestamp = THE_ZERO;
+    uint64_t end_timestamp = THE_ZERO;
+
+    void start() {
+        this->end_timestamp = THE_ZERO;
+        this->start_timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+                ).count();
+    }
+
+    void stop() {
+        this->end_timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+                ).count();
+    }
+
+    uint64_t elapsed() {
+        if (this->end_timestamp == THE_ZERO) {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()
+                ).count() - this->start_timestamp;
+        }
+        return this->end_timestamp - this->start_timestamp;
+    }
+};
+
 typedef enum {
     SplitHorizontallyDirection,
     SplitVerticallyDirection,
@@ -429,7 +455,7 @@ struct TabBody: QWidget {
         QSplitter *splitter;
         QWebEngineView *view;
     } val;
-    QElapsedTimer load_timer;
+    LunaBrowserElapsedTimer load_timer;
     QString search_term;
     // QWebEngineFindTextResult *find_result;
 
@@ -1979,15 +2005,17 @@ struct LunaBrowser: QMainWindow {
         QObject::connect(web_engine_view, &QWebEngineView::urlChanged, this, [this](const QUrl u) {
             if (u.scheme() != LUNA_PREFEX) this->profile.history.append(u);
         });
-        // update the status bar when the tab finshes loading
+        QObject::connect(web_engine_view, &QWebEngineView::loadStarted, this, [web_engine_view, this]() {
+            auto *parent = web_engine_view->parentWidget();
+            while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
+            auto *tab_body = static_cast<TabBody*>(parent);
+            tab_body->load_timer.start();
+        });
         QObject::connect(web_engine_view, &QWebEngineView::loadFinished, this, [web_engine_view, this]() {
-                auto *parent = web_engine_view->parentWidget();
-                while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
-                auto *tab_body = static_cast<TabBody*>(parent);
-                const auto current_idx = tab_body ? this->tabs->indexOf(tab_body) : -1;
-                if (current_idx == this->tabs->currentIndex() && tab_body) {
-                    tab_body->load_timer.restart();
-                }
+            auto *parent = web_engine_view->parentWidget();
+            while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
+            auto *tab_body = static_cast<TabBody*>(parent);
+            tab_body->load_timer.stop();
         });
         QObject::connect(web_engine_view, &QWebEngineView::loadProgress, this, [web_engine_view, this](const size_t progress) {
             auto *parent = web_engine_view->parentWidget();
