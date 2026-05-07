@@ -2594,11 +2594,17 @@ int main(int argc, char *argv[]) {
     LunaAdBlocker adblocker(std::filesystem::path(get_app_data_base()) / "adblocker");
     if (!opts.disable_adblocker) {
         const auto easylist_url = "https://easylist.to/easylist/easylist.txt";
+        const auto easyprivacy_url = "https://easylist.to/easylist/easyprivacy.txt";
+        const auto ubo_filters_url = "https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/filters.txt";
         const auto remove_yt_shorts = "https://raw.githubusercontent.com/brave/adblock-lists/refs/heads/master/brave-lists/yt-shorts.txt";
+        const auto unbreak_url = "https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/unbreak.txt";
         const auto default_lists = {
             easylist_url,
+            easyprivacy_url,
             remove_yt_shorts,
+            ubo_filters_url,
             // "file:///home/anas/code/luna/test_rules.txt",
+            unbreak_url,
         };
         adblocker.setup(default_lists);
         LUNA_DEBUG("Adblocker initialized with: {} network_rules, {} network_exception_rules, {}, content_rules", adblocker.network_rules.size(), adblocker.network_exception_rules.size(), adblocker.content_rules.size());
