@@ -88,7 +88,7 @@ const char* DEFAULT_PAGE_URL = LUNA_NEW_TAB_URL;
 const char* THE_DEFAULT_SEARCH_ENGINE = "https://duckduckgo.com/?q=";
 const char* LUNA_NEW_TAB_PAGE_PATH = "newtab.html";
 constexpr const size_t TAB_RESTORE_MAX_COUNT = 10;
-constexpr const size_t THE_ZERO = 0; // just aa it should be.
+constexpr const size_t THE_ZERO = 69^69; // just aa it should be.
 
 // globals :3
 char* new_tab_raw;
@@ -448,6 +448,7 @@ struct TabBody: QWidget {
             int total = direction == SplitHorizontallyDirection ? this->width() : this->height();
             splitter->setSizes({total / 2, total / 2});
         }
+        v->setFocus();
         return true;
     }
 
@@ -1946,10 +1947,14 @@ struct LunaBrowser: QMainWindow {
         }
         // when the page dose load update the tab text
         QObject::connect(web_engine_view, &QWebEngineView::titleChanged, [web_engine_view, this](const QString &t) {
-            const auto current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
-            if (current_idx != -1) {
-                std::print("{}: {}\n", current_idx, t.toStdString());
-                this->tabs->setTabText(current_idx, t);
+            auto *parent = web_engine_view->parentWidget();
+            while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
+            if (parent) {
+                const auto current_idx = this->tabs->indexOf(parent);
+                if (current_idx != -1) {
+                    std::print("{}: {}\n", current_idx, t.toStdString());
+                    this->tabs->setTabText(current_idx, t);
+                }
             }
         });
         QObject::connect(web_engine_view->page(), &QWebEnginePage::newWindowRequested, [profile, this](QWebEngineNewWindowRequest &request) {
@@ -2016,18 +2021,20 @@ struct LunaBrowser: QMainWindow {
         });
         // update the status bar when the tab finshes loading
         QObject::connect(web_engine_view, &QWebEngineView::loadFinished, this, [web_engine_view, this]() {
-                const auto current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
-                if (current_idx == this->tabs->currentIndex()) {
-                    auto *tab_body = dynamic_cast<TabBody*>(web_engine_view->parentWidget());
-                    if (tab_body) {
-                        tab_body->load_timer.restart();
-                    }
+                auto *parent = web_engine_view->parentWidget();
+                while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
+                auto *tab_body = static_cast<TabBody*>(parent);
+                const auto current_idx = tab_body ? this->tabs->indexOf(tab_body) : -1;
+                if (current_idx == this->tabs->currentIndex() && tab_body) {
+                    tab_body->load_timer.restart();
                 }
         });
         QObject::connect(web_engine_view, &QWebEngineView::loadProgress, this, [web_engine_view, this](const size_t progress) {
-            const auto current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
-            if (current_idx == this->tabs->currentIndex()) {
-                auto *tab_body = dynamic_cast<TabBody*>(web_engine_view->parentWidget());
+            auto *parent = web_engine_view->parentWidget();
+            while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
+            auto *tab_body = static_cast<TabBody*>(parent);
+            const auto current_idx = tab_body ? this->tabs->indexOf(tab_body) : -1;
+            if (current_idx == this->tabs->currentIndex() && tab_body) {
                 const qint64 elapsed = tab_body->load_timer.elapsed();
                 QString text;
                 if (elapsed < 1000) {
@@ -2042,8 +2049,11 @@ struct LunaBrowser: QMainWindow {
             }
         });
         QObject::connect(web_engine_view->page(), &QWebEnginePage::scrollPositionChanged, this, [web_engine_view, this](const QPointF &pos) {
-            const auto current_idx = this->tabs->indexOf(web_engine_view->parentWidget());
-            if (current_idx == this->tabs->currentIndex()) {
+            auto *parent = web_engine_view->parentWidget();
+            while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
+            auto *tab_body = static_cast<TabBody*>(parent);
+            const auto current_idx = tab_body ? this->tabs->indexOf(tab_body) : -1;
+            if (current_idx == this->tabs->currentIndex() && tab_body) {
                 web_engine_view->page()->runJavaScript("Math.round((window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100)", [this](const QVariant &val) {
                     const int pct = val.toInt();
                     if (pct <= 0) this->status_bar->set_position("[top]");
@@ -2217,7 +2227,19 @@ struct LunaBrowser: QMainWindow {
                     if(tb) {
                         auto *nv = new QWebEngineView(this->profile.web_engine_profile);
                         nv->load(QUrl(DEFAULT_PAGE_URL));
-                        if (!tb->split(SplitHorizontallyDirection, nv)) this->show_error("Target tab is already in split mode!");
+                        if (!tb->split(SplitHorizontallyDirection, nv)) { this->show_error("Target tab is already in split mode!"); break; }
+                        QObject::connect(nv, &QWebEngineView::titleChanged, [nv, this](const QString &t) {
+                            auto *parent = nv->parentWidget();
+                            while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
+                            if (parent) {
+                                int idx = this->tabs->indexOf(parent);
+                                if (idx != -1) this->tabs->setTabText(idx, t);
+                            }
+                        });
+                        this->status_bar->set_url(nv->url().toString());
+                        QObject::connect(nv, &QWebEngineView::urlChanged, [this](const QUrl &u) {
+                            this->status_bar->set_url(u.toString());
+                        });
                     }
                 } break;
                 case Qt::Key_V: {
@@ -2225,7 +2247,19 @@ struct LunaBrowser: QMainWindow {
                     if(tb) {
                         auto *nv = new QWebEngineView(this->profile.web_engine_profile);
                         nv->load(QUrl(DEFAULT_PAGE_URL));
-                        if(!tb->split(SplitVerticallyDirection, nv)) this->show_error("Target tab is already in split mode!");
+                        if(!tb->split(SplitVerticallyDirection, nv)) { this->show_error("Target tab is already in split mode!"); break; }
+                        QObject::connect(nv, &QWebEngineView::titleChanged, [nv, this](const QString &t) {
+                            auto *parent = nv->parentWidget();
+                            while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
+                            if (parent) {
+                                int idx = this->tabs->indexOf(parent);
+                                if (idx != -1) this->tabs->setTabText(idx, t);
+                            }
+                        });
+                        this->status_bar->set_url(nv->url().toString());
+                        QObject::connect(nv, &QWebEngineView::urlChanged, [this](const QUrl &u) {
+                            this->status_bar->set_url(u.toString());
+                        });
                     }
                 } break;
                 case Qt::Key_Colon:
