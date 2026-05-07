@@ -1474,7 +1474,7 @@ struct LunaAdBlocker {
         for (auto& exc : this->network_exception_rules) {
             if (exc.match(url, resource_type, document_domain)) {
 #ifdef LUNA_TESTING
-                LUNA_LOG("Ignored by rule: {}", exc.original_rule);
+                LUNA_DEBUG("Ignored by rule: {}", exc.original_rule);
 #endif // LUNA_TESTING
                result = false;
                found = true;
@@ -1485,7 +1485,7 @@ struct LunaAdBlocker {
             for (auto& blk : this->network_rules) {
                 if (blk.match(url, resource_type, document_domain)) {
 #ifdef LUNA_TESTING
-                    LUNA_LOG("Blocked by rule: {}", blk.original_rule);
+                    LUNA_DEBUG("Blocked by rule: {}", blk.original_rule);
 #endif // LUNA_TESTING
                    result = true;
                    break;
@@ -1557,7 +1557,7 @@ struct NetworkAdBlocker: QWebEngineUrlRequestInterceptor {
         const auto block = this->adblocker.block_request(url, resource_type, document_domain);
         if (block) {
             total_blocked_ads++;
-            LUNA_LOG("LunaAdBlocker: blocked [{}]: {}", total_blocked_ads, url);
+            LUNA_DEBUG("LunaAdBlocker: blocked [{}]: {}", total_blocked_ads, url);
             info.block(true);
         }
     }
@@ -2767,7 +2767,7 @@ int main(int argc, char *argv[]) {
             // "file:///home/anas/code/luna/test_rules.txt",
         };
         adblocker.setup(default_lists);
-        LUNA_LOG("Adblocker initialized with: {} network_rules, {} network_exception_rules, {}, content_rules", adblocker.network_rules.size(), adblocker.network_exception_rules.size(), adblocker.content_rules.size());
+        LUNA_DEBUG("Adblocker initialized with: {} network_rules, {} network_exception_rules, {}, content_rules", adblocker.network_rules.size(), adblocker.network_exception_rules.size(), adblocker.content_rules.size());
 #if 0
         // Debug: print loaded rules
         LUNA_LOG("{}", "=== Loaded Network Rules ===");
