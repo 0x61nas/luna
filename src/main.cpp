@@ -1158,7 +1158,7 @@ struct LunaAdBlocker {
         }
         for (const auto list : lists) {
             std::string_view url_sv(list);
-            auto name = url_sv.substr(url_sv.find_last_of('/') + 1);
+            std::string name(url_sv.substr(url_sv.find_last_of('/') + 1));
             if (name.empty()) name = "list_" + std::to_string(std::hash<std::string_view>{}(url_sv));
             this->add_list(url_sv, name);
         }
@@ -1867,7 +1867,7 @@ struct LunaBrowser: QMainWindow {
                 if (auto *tab_body = this->active_tab()) {
                     if (auto *v = tab_body->active_veiw()) {
                         tab_body->search_term = text;
-                        v->page()->findText(text, QWebEnginePage::FindFlags(), [this, tab_body](const QWebEngineFindTextResult &result) {
+                        v->page()->findText(text, QWebEnginePage::FindFlags(), [](const QWebEngineFindTextResult &) {
                             // tab_body->find_result = &result;
                             // this->status_bar->set_search_result(QString("(%1/%2)")
                                 // .arg(result.activeMatch())
@@ -1950,10 +1950,10 @@ struct LunaBrowser: QMainWindow {
         this->status_bar->setVisible(!this->opts.frameless);
         if (this->opts.urls.empty()) {
             // Create the default tab
-            const auto *web_view = this->new_tab(this->profile.web_engine_profile); 
+            this->new_tab(this->profile.web_engine_profile); 
         } else {
             for (std::string& url: this->opts.urls) {
-                const auto *web_view = this->new_tab(this->profile.web_engine_profile, url.c_str()); 
+                this->new_tab(this->profile.web_engine_profile, url.c_str()); 
             }
             this->opts.urls.clear(); // we are not gonna use any value of this vector after this point.
             this->opts.urls.shrink_to_fit();
@@ -1984,7 +1984,7 @@ struct LunaBrowser: QMainWindow {
             this->tabs->setCurrentIndex(idx);
         }
         // when the page dose load update the tab text
-        QObject::connect(web_engine_view, &QWebEngineView::titleChanged, [tab_body, web_engine_view, this](const QString &t) {
+        QObject::connect(web_engine_view, &QWebEngineView::titleChanged, [tab_body, this](const QString &) {
             // std::print("{}: {}\n", this->tabs->indexOf(parent), t.toStdString());
             this->update_tab_title(tab_body);
         });
@@ -2071,7 +2071,7 @@ struct LunaBrowser: QMainWindow {
                 this->status_bar->set_progress(progress);
             }
         });
-        QObject::connect(web_engine_view->page(), &QWebEnginePage::scrollPositionChanged, this, [web_engine_view, this](const QPointF &pos) {
+        QObject::connect(web_engine_view->page(), &QWebEnginePage::scrollPositionChanged, this, [web_engine_view, this](const QPointF &) {
             auto *parent = web_engine_view->parentWidget();
             while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
             auto *tab_body = static_cast<TabBody*>(parent);
@@ -2232,7 +2232,7 @@ struct LunaBrowser: QMainWindow {
                             } else {
                                 flags = QWebEnginePage::FindFlags();
                             }
-                            tab_body->active_veiw()->page()->findText(tab_body->search_term, flags, [this, tab_body](const QWebEngineFindTextResult &result) {
+                            tab_body->active_veiw()->page()->findText(tab_body->search_term, flags, [](const QWebEngineFindTextResult &) {
                                 // tab_body->find_result = &result;
                                 // this->status_bar->set_search_result(QString("(%1/%2)")
                                     // .arg(result.activeMatch())
@@ -2380,7 +2380,7 @@ struct LunaBrowser: QMainWindow {
         return QObject::eventFilter(obj, event);
     }
 
-    void closeEvent(QCloseEvent *e) override { 
+    void closeEvent(QCloseEvent *) override { 
         // flush the new entries in our history
         if (!this->opts.private_window) {
             this->profile.history.save();
@@ -2429,7 +2429,7 @@ struct LunaBrowser: QMainWindow {
         auto *tab_body = this->new_tab(this->profile.web_engine_profile, url.toStdString().c_str(), false);
         if (auto *v = tab_body->active_veiw()) {
             // Restore scroll position and search term after page loads
-            QObject::connect(v, &QWebEngineView::loadFinished, this, [v, state, tab_body, this]() {
+            QObject::connect(v, &QWebEngineView::loadFinished, this, [v, state, tab_body]() {
                 // Restore scroll position
                 v->page()->runJavaScript(QString("window.scrollTo(%1, %2);")
                     .arg(state.scroll_position.x())
@@ -2438,7 +2438,7 @@ struct LunaBrowser: QMainWindow {
                 if (!state.search_term.isEmpty()) {
                     // LUNA_LOG("Perform search for {}", state.search_term.toStdString());
                     tab_body->search_term = state.search_term;
-                    v->page()->findText(state.search_term, QWebEnginePage::FindFlags(), [this, tab_body](const QWebEngineFindTextResult &result) {
+                    v->page()->findText(state.search_term, QWebEnginePage::FindFlags(), [](const QWebEngineFindTextResult &) {
                         // TODO(anas): are we intrested in the result.count?
                     });
                 }
