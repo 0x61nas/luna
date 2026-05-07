@@ -27,6 +27,11 @@ build-static EXTRA_CXXFLAGS='-O3 -static-libstdc++ -static-libgcc':
     [[ -d {{BUILD_DIR}} ]] || mkdir -p {{BUILD_DIR}}
     {{CXX}} {{CXXFLAGS}} {{EXTRA_CXXFLAGS}} src/main.cpp -o {{BUILD_DIR}}/luna-browser $(pkg-config {{PFLAGS}} {{PLIBS}})
 
+sanitize SANITIZER='address,undefined':
+    [[ -d {{BUILD_DIR}} ]] || mkdir -p {{BUILD_DIR}}
+    clang++ {{CXXFLAGS}} -O0 -g -fsanitize={{SANITIZER}} src/main.cpp -o {{BUILD_DIR}}/luna-browser-santize $(pkg-config {{PFLAGS}} {{PLIBS}})
+    LSAN_OPTIONS=suppressions=lsan_suppr.txt {{BUILD_DIR}}/luna-browser-santize
+
 download-easylist:
     curl -O https://easylist.to/easylist/easylist.txt
 
