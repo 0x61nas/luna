@@ -421,10 +421,8 @@ struct TabBody: QWidget {
     }
 
     bool split(const TabBodySplitDirection direction, QWebEngineView *v) {
-        auto *splitter = new QSplitter(
-            direction == SplitHorizontallyDirection ? Qt::Horizontal : Qt::Vertical,
-            this
-        );
+        const auto orientation = direction == SplitHorizontallyDirection ? Qt::Horizontal : Qt::Vertical;
+        auto *splitter = new QSplitter(orientation, this);
 
         if (this->tag == TabBodyStateTag::SingleViewTagBodyState) {
             assert(this->val.view);
@@ -433,6 +431,10 @@ struct TabBody: QWidget {
             splitter->addWidget(val.view);
         } else if (this->tag == TabBodyStateTag::SplitedTagBodyState) {
             assert(this->val.splitter);
+            if (this->val.splitter->orientation() != orientation) {
+                this->val.splitter->setOrientation(orientation); // if the orientation is different maybe all the user needs is to change the direction
+                return true;
+            }
             return false; // we only support two views per tab for now
         }
 
