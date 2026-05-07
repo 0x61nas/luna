@@ -430,19 +430,13 @@ struct TabBody: QWidget {
             assert(this->val.view);
             this->layout()->removeWidget(this->val.view);
             this->val.view->setParent(splitter);
-            // this->val.view->installEventFilter(this); // to handle the FocusIn/Out events in the level of the view
             splitter->addWidget(val.view);
         } else if (this->tag == TabBodyStateTag::SplitedTagBodyState) {
             assert(this->val.splitter);
-            // splitter->setParent(this->val.splitter);
-            // const auto OLD_IDX = this->val.splitter->indexOf(this->active_veiw());
-            // const auto old = this->val.splitter->replaceWidget(OLD_IDX, splitter);
-            // splitter->addWidget(old);
             return false; // we only support two views per tab for now
         }
 
         v->setParent(splitter);
-        // v->installEventFilter(this); // to handle the FocusIn/Out events in the level of the view
         splitter->addWidget(v);
 
         if (this->tag == TabBodyStateTag::SingleViewTagBodyState) {
@@ -475,10 +469,31 @@ struct TabBody: QWidget {
 
     bool remove_active_veiw() {
         assert(this->tag == TabBodyStateTag::SplitedTagBodyState);
+        auto *splitter = this->val.splitter;
         auto w = this->active_veiw();
+
+        // Find the survivor (the view NOT being removed).
+        // Must be done before removing anything, since QSplitter indices shift
+        // when a widget is reparented away.
+        QWebEngineView *view = nullptr;
+        for (int i = 0; i < splitter->count(); ++i) {
+            auto *wi = qobject_cast<QWebEngineView*>(splitter->widget(i));
+            if (wi && wi != w) {
+                view = wi;
+                break;
+            }
+        }
+        assert(view != nullptr);
+
         w->setParent(nullptr);
         w->deleteLater();
-        return this->val.splitter->count() == THE_ZERO;
+        view->setParent(this);
+        this->layout()->removeWidget(splitter);
+        this->layout()->addWidget(view);
+        delete splitter;
+        this->val.view = view;
+        this->tag = TabBodyStateTag::SingleViewTagBodyState;
+        return false; // NOTE(anas): for now we only support one level of splitting
     }
 
 };
