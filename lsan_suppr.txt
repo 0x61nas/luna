@@ -1,0 +1,8 @@
+# Qt6WebEngineCore / Chromium - intentional allocations not freed on exit
+leak:Qt6WebEngineCore
+
+# Qt6Core internal allocations (QWebEngineUrlRequestInterceptor base)
+leak:Qt6Core
+
+# NVIDIA driver allocations
+leak:libnvidia-glcore
