@@ -12,6 +12,8 @@ int test_easylist_samples();
 int test_str2u64();
 int test_cache();
 int test_get_hiding_rules_for_domain();
+int test_load_all_filter_lists();
+int test_block_request_combinations();
 
 #define LUNA_TEST_ASSERT(cond) \
     do { \
@@ -49,6 +51,12 @@ int run_tests() {
     printf("\nTesting get hiding rules for domain...\n");
     failed_tests += test_get_hiding_rules_for_domain();
 
+    printf("\nTesting all filter lists combined...\n");
+    failed_tests += test_load_all_filter_lists();
+
+    printf("\nTesting block_request argument combinations...\n");
+    failed_tests += test_block_request_combinations();
+
     return failed_tests;
 }
 
@@ -59,6 +67,270 @@ int test_easylist_samples() {
 
     LUNA_TEST_ASSERT(ab.block_request("https://thatsillyman.win") == false);
     LUNA_TEST_ASSERT(ab.block_request("https://googleads.g.doubleclick.net/pagead/id") == true);
+
+    return luna_failed_tests;
+}
+
+int test_load_all_filter_lists() {
+    int luna_failed_tests = 0;
+
+    // Test 1: Per-file filter counts
+    printf("\n--- Per-file filter counts ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used"));
+        ab.parse_list_file("tests/easylist.txt");
+        LUNA_TEST_ASSERT(ab.network_rules.size() == 63350);
+        LUNA_TEST_ASSERT(ab.network_exception_rules.size() == 732);
+        LUNA_TEST_ASSERT(ab.content_rules.size() == 23518);
+    }
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used"));
+        ab.parse_list_file("tests/easyprivacy.txt");
+        LUNA_TEST_ASSERT(ab.network_rules.size() == 54572);
+        LUNA_TEST_ASSERT(ab.network_exception_rules.size() == 818);
+        LUNA_TEST_ASSERT(ab.content_rules.size() == 33);
+    }
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used"));
+        ab.parse_list_file("tests/uboFilters.txt");
+        LUNA_TEST_ASSERT(ab.network_rules.size() == 1065);
+        LUNA_TEST_ASSERT(ab.network_exception_rules.size() == 762);
+        LUNA_TEST_ASSERT(ab.content_rules.size() == 4323);
+    }
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used"));
+        ab.parse_list_file("tests/yt-shorts.txt");
+        LUNA_TEST_ASSERT(ab.network_rules.size() == 0);
+        LUNA_TEST_ASSERT(ab.network_exception_rules.size() == 0);
+        LUNA_TEST_ASSERT(ab.content_rules.size() == 15);
+    }
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used"));
+        ab.parse_list_file("tests/unbreak.txt");
+        LUNA_TEST_ASSERT(ab.network_rules.size() == 767);
+        LUNA_TEST_ASSERT(ab.network_exception_rules.size() == 1253);
+        LUNA_TEST_ASSERT(ab.content_rules.size() == 456);
+    }
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used"));
+        ab.parse_list_file("tests/quick-fixes.txt");
+        LUNA_TEST_ASSERT(ab.network_rules.size() == 39);
+        LUNA_TEST_ASSERT(ab.network_exception_rules.size() == 13);
+        LUNA_TEST_ASSERT(ab.content_rules.size() == 169);
+    }
+
+    // Test 2: Combined filter counts across all lists
+    printf("\n--- Combined filter counts ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used"));
+        ab.parse_list_file("tests/easylist.txt");
+        ab.parse_list_file("tests/easyprivacy.txt");
+        ab.parse_list_file("tests/uboFilters.txt");
+        ab.parse_list_file("tests/yt-shorts.txt");
+        ab.parse_list_file("tests/unbreak.txt");
+        ab.parse_list_file("tests/quick-fixes.txt");
+
+        LUNA_TEST_ASSERT(ab.network_rules.size() == 119793);
+        LUNA_TEST_ASSERT(ab.network_exception_rules.size() == 3578);
+        LUNA_TEST_ASSERT(ab.content_rules.size() == 28514);
+    }
+
+    // Test 3: Normal page URLs should NOT be blocked
+    printf("\n--- Page URLs (should not block) ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used"));
+        ab.parse_list_file("tests/easylist.txt");
+        ab.parse_list_file("tests/easyprivacy.txt");
+        ab.parse_list_file("tests/uboFilters.txt");
+        ab.parse_list_file("tests/yt-shorts.txt");
+        ab.parse_list_file("tests/unbreak.txt");
+        ab.parse_list_file("tests/quick-fixes.txt");
+
+        LUNA_TEST_ASSERT(ab.block_request("https://youtu.be/SeMXa5lBGYc") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://thatsillyman.win") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://app.codecrafters.io/users/anas-elgarhy") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.google.com") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://github.com") == false);
+    }
+
+    // Test 4: Known ad/tracker URLs SHOULD be blocked
+    printf("\n--- Ad/tracker URLs (should block) ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used"));
+        ab.parse_list_file("tests/easylist.txt");
+        ab.parse_list_file("tests/easyprivacy.txt");
+        ab.parse_list_file("tests/uboFilters.txt");
+        ab.parse_list_file("tests/yt-shorts.txt");
+        ab.parse_list_file("tests/unbreak.txt");
+        ab.parse_list_file("tests/quick-fixes.txt");
+
+        LUNA_TEST_ASSERT(ab.block_request("https://www.googletagmanager.com/gtag/js?id=G-T24VL5516K") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://pubads.g.doubleclick.net/gampad/adx") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://ad.doubleclick.net/ddm/track") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.google-analytics.com/analytics.js") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://connect.facebook.net/en_US/fbevents.js") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://securepubads.g.doubleclick.net/gampad/ads") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://googleads.g.doubleclick.net/pagead/id") == true);
+    }
+
+    // Test 5: Content hiding rules from combined lists
+    printf("\n--- Content hiding rules ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used"));
+        ab.parse_list_file("tests/easylist.txt");
+        ab.parse_list_file("tests/easyprivacy.txt");
+        ab.parse_list_file("tests/uboFilters.txt");
+        ab.parse_list_file("tests/yt-shorts.txt");
+        ab.parse_list_file("tests/unbreak.txt");
+        ab.parse_list_file("tests/quick-fixes.txt");
+
+        std::string r_youtube = ab.get_hiding_rules_for_domain("youtube.com");
+        LUNA_TEST_ASSERT(!r_youtube.empty());
+        LUNA_TEST_ASSERT(r_youtube[0] == '[');
+        LUNA_TEST_ASSERT(r_youtube.back() == ']');
+        LUNA_TEST_ASSERT(r_youtube.find("ytd-rich-item-renderer") != std::string::npos);
+
+        std::string r_reddit = ab.get_hiding_rules_for_domain("reddit.com");
+        LUNA_TEST_ASSERT(!r_reddit.empty());
+        LUNA_TEST_ASSERT(r_reddit[0] == '[');
+        LUNA_TEST_ASSERT(r_reddit.back() == ']');
+        LUNA_TEST_ASSERT(r_reddit.find("shreddit-ad-post") != std::string::npos);
+
+        std::string r_unknown = ab.get_hiding_rules_for_domain("somerandomdomain12345.xyz");
+        LUNA_TEST_ASSERT(!r_unknown.empty());
+        LUNA_TEST_ASSERT(r_unknown[0] == '[');
+        LUNA_TEST_ASSERT(r_unknown.back() == ']');
+        LUNA_TEST_ASSERT(r_unknown.find("ytd-rich-item-renderer") == std::string::npos);
+        LUNA_TEST_ASSERT(r_unknown.find("shreddit-ad-post") == std::string::npos);
+    }
+
+    return luna_failed_tests;
+}
+
+int test_block_request_combinations() {
+    int luna_failed_tests = 0;
+    const char* lists[] = {
+        "tests/easylist.txt", "tests/easyprivacy.txt", "tests/uboFilters.txt",
+        "tests/yt-shorts.txt", "tests/unbreak.txt", "tests/quick-fixes.txt"
+    };
+
+    // Test 1: luna: internal URLs are hardcoded to never block
+    printf("\n--- luna: internal URLs (hardcoded exemption) ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used1"));
+        for (auto f : lists) ab.parse_list_file(f);
+
+        LUNA_TEST_ASSERT(ab.block_request("luna://settings") == false);
+        LUNA_TEST_ASSERT(ab.block_request("luna://settings", 1 << 0) == false);
+        LUNA_TEST_ASSERT(ab.block_request("luna://settings", 0, "example.com") == false);
+        LUNA_TEST_ASSERT(ab.block_request("luna:newtab") == false);
+        LUNA_TEST_ASSERT(ab.block_request("luna:newtab", 1 << 1, "youtube.com") == false);
+    }
+
+    // Test 2: resource_type filtering — same URL with different resource types
+    printf("\n--- resource_type filtering ($image rule) ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used2"));
+        for (auto f : lists) ab.parse_list_file(f);
+
+        // /ad/image/*$image should only match when resource_type includes image
+        LUNA_TEST_ASSERT(ab.block_request("https://example.com/ad/image/banner.png") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://example.com/ad/image/banner.png", 1 << 0) == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://example.com/ad/image/banner.png", 1 << 1) == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://example.com/ad/image/banner.png", 1 << 2) == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://example.com/ad/image/banner.png", 1 << 5) == false);
+    }
+
+    // Test 3: document_domain filtering — same URL, different document domains
+    printf("\n--- document_domain (third-party) filtering ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used3"));
+        for (auto f : lists) ab.parse_list_file(f);
+
+        // thatsillyman.win is not an ad domain — not blocked as page load
+        LUNA_TEST_ASSERT(ab.block_request("https://thatsillyman.win") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://thatsillyman.win", 0, "thatsillyman.win") == false);
+    }
+
+    // Test 4: Combined resource_type + document_domain
+    printf("\n--- Combined resource_type + document_domain ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used4"));
+        for (auto f : lists) ab.parse_list_file(f);
+
+        // ||bit.ly^$script,domain=dailyuploads.net|freeshot.live
+        // nothing set → not blocked
+        LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123") == false);
+        // script + matching domain → blocked
+        LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 1 << 0, "dailyuploads.net") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 1 << 0, "freeshot.live") == true);
+        // script but no domain → not blocked (domain missing)
+        LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 1 << 0) == false);
+        // script + non-matching domain → not blocked (wrong domain)
+        LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 1 << 0, "google.com") == false);
+        // stylesheet + matching domain → not blocked (wrong resource type)
+        LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 1 << 2, "dailyuploads.net") == false);
+        // image + matching domain → not blocked (wrong resource type)
+        LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 1 << 1, "dailyuploads.net") == false);
+        // no resource type + matching domain → not blocked (no type specified)
+        LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 0, "dailyuploads.net") == false);
+    }
+
+    // Test 5: Page URLs with various argument combos
+    printf("\n--- Page URLs with various argument combos ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used5"));
+        for (auto f : lists) ab.parse_list_file(f);
+
+        LUNA_TEST_ASSERT(ab.block_request("https://youtu.be/SeMXa5lBGYc") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://youtu.be/SeMXa5lBGYc", 1 << 0) == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://youtu.be/SeMXa5lBGYc", 0, "youtube.com") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://youtu.be/SeMXa5lBGYc", 1 << 1, "reddit.com") == false);
+
+        LUNA_TEST_ASSERT(ab.block_request("https://thatsillyman.win") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://thatsillyman.win", 1 << 0) == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://thatsillyman.win", 0, "thatsillyman.win") == false);
+
+        LUNA_TEST_ASSERT(ab.block_request("https://app.codecrafters.io/users/anas-elgarhy") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://app.codecrafters.io/users/anas-elgarhy", 1 << 0) == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://app.codecrafters.io/users/anas-elgarhy", 0, "codecrafters.io") == false);
+
+        LUNA_TEST_ASSERT(ab.block_request("https://github.com") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://github.com", 1 << 1) == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://github.com", 0, "example.com") == false);
+    }
+
+    // Test 6: Known ad URLs blocked with all argument combinations
+    printf("\n--- Ad URLs with all argument combos ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used6"));
+        for (auto f : lists) ab.parse_list_file(f);
+
+        const char* ad_urls[] = {
+            "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js",
+            "https://www.googletagmanager.com/gtag/js?id=G-T24VL5516K",
+            "https://www.google-analytics.com/analytics.js",
+            "https://ad.doubleclick.net/ddm/track",
+            "https://pubads.g.doubleclick.net/gampad/adx",
+            "https://securepubads.g.doubleclick.net/gampad/ads",
+            "https://googleads.g.doubleclick.net/pagead/id",
+            "https://connect.facebook.net/en_US/fbevents.js",
+        };
+
+        for (const char* url : ad_urls) {
+            LUNA_TEST_ASSERT(ab.block_request(url) == true);
+        }
+        for (const char* url : ad_urls) {
+            LUNA_TEST_ASSERT(ab.block_request(url, 1 << 0, "example.com") == true);
+        }
+        for (const char* url : ad_urls) {
+            LUNA_TEST_ASSERT(ab.block_request(url, 1 << 1) == true);
+        }
+        for (const char* url : ad_urls) {
+            LUNA_TEST_ASSERT(ab.block_request(url, 0, url) == true);
+        }
+    }
 
     return luna_failed_tests;
 }
