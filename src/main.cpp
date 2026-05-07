@@ -1599,8 +1599,8 @@ static void register_luna_scheme() {
 
 struct LunaBrowserHistory {
     std::filesystem::path file_path;
-    std::vector<char*> entries;
-    size_t new_start = 0;
+    std::vector<std::string> entries;
+    size_t new_start = THE_ZERO;
 
     LunaBrowserHistory() = default;
     LunaBrowserHistory(const std::filesystem::path history_file_path) {
@@ -1618,17 +1618,17 @@ struct LunaBrowserHistory {
                 LUNA_LOG("Cant open {} to load the history, please check your permissions", this->file_path.c_str());
                 return;
             }
-            const auto& entries = &this->entries;
             char* buf = nullptr;
             size_t n = 0;
             while (getline(&buf, &n, file) != -1) {
-                entries->emplace_back(buf);
+                entries.emplace_back(buf);
+                free(buf); // dont be like the chrome browser
                 buf = nullptr;
                 n = 0;
             }
             free(buf);
             fclose(file);
-            this->new_start = entries->size();
+            this->new_start = entries.size();
         } else {
             const auto parent_path = this->file_path.parent_path();
             if (!std::filesystem::exists(parent_path)) {
@@ -1645,9 +1645,8 @@ struct LunaBrowserHistory {
             return false;
         }
         const auto entries_size = this->entries.size();
-        for (size_t i = this->new_start;
-                i < entries_size; i++) {
-            std::fprintf(file, "%s\n", this->entries[i]);
+        for (size_t i = this->new_start; i < entries_size; i++) {
+            std::fprintf(file, "%s\n", this->entries[i].c_str());
         }
         fclose(file);
         this->new_start = entries_size;
@@ -1656,16 +1655,11 @@ struct LunaBrowserHistory {
 
     void append(const QUrl url) {
         auto byte_arr = url.toEncoded();
-        auto str = byte_arr.toStdString();
-        char* p = new char[str.size() + 1];
-        std::memcpy(p, str.c_str(), str.size() + 1);
-        this->entries.emplace_back(p);
+        this->entries.emplace_back(byte_arr.constData(), byte_arr.size());
     }
 
     void add_search(const char* query) {
-        char* p = new char[strlen(query) + 1];
-        std::memcpy(p, query, strlen(query) + 1);
-        this->entries.emplace_back(p);
+        this->entries.emplace_back(query);
     }
 };
 
@@ -1683,6 +1677,7 @@ struct LunaBrowserProfile {
     LunaBrowserHistory history;
     LunaBrowserBookmarks bookmarks;
     QWebEngineProfile *web_engine_profile;
+    QWebEngineUrlRequestInterceptor *interceptor = nullptr;
 
     LunaBrowserProfile(std::filesystem::path profile_base, char* name, LunaAdBlocker& adblocker, bool disable_adblocker = false) : name(name) {
         LunaBrowserHistory history(profile_base / "history");
@@ -1696,9 +1691,20 @@ struct LunaBrowserProfile {
         web_engine_profile->setCachePath((profile_base / "cache").c_str());
         web_engine_profile->installUrlSchemeHandler(LUNA_PREFEX, new LunaBrowserSchemeHandler());
         if (!disable_adblocker) {
-            web_engine_profile->setUrlRequestInterceptor(new NetworkAdBlocker(adblocker));
+            this->interceptor = new NetworkAdBlocker(adblocker);
+            web_engine_profile->setUrlRequestInterceptor(this->interceptor);
         }
         this->web_engine_profile = web_engine_profile;
+    }
+
+    void destroy() {
+        if (this->web_engine_profile) {
+            this->web_engine_profile->setUrlRequestInterceptor(nullptr);
+            delete this->interceptor;
+            this->interceptor = nullptr;
+            delete this->web_engine_profile;
+            this->web_engine_profile = nullptr;
+        }
     }
 };
 
@@ -1777,8 +1783,8 @@ struct LunaBrowser: QMainWindow {
         if (title.isEmpty()) title = "Luna";
         if (tab_body->tag == TabBodyStateTag::SplitedTagBodyState && tab_body->val.splitter) {
             int active_idx = tab_body->val.splitter->indexOf(active);
-            if (active_idx >= 0) {
-                int other_idx = (active_idx == 0) ? 1 : 0;
+            if (active_idx >= THE_ZERO) {
+                int other_idx = (active_idx == THE_ZERO) ? 1 : THE_ZERO;
                 title = QString("%1|%2: %3").arg(other_idx + 1).arg(active_idx + 1).arg(title);
             }
         } else {
@@ -2620,7 +2626,9 @@ int main(int argc, char *argv[]) {
 
         FILE *new_tab_f = std::fopen(new_tab_path.string().c_str(), "rb");
         if (new_tab_f) {
+            new_tab_raw = new char[fsize + 1];
             std::fread(new_tab_raw, 1, fsize, new_tab_f);
+            new_tab_raw[fsize] = '\0';
             std::fclose(new_tab_f);
         }
     } else {
@@ -2792,6 +2800,9 @@ int main(int argc, char *argv[]) {
     browser.show();
 
     const int ret = app.exec();
+
+    // Destroy the web engine profile (and its interceptors) before adblocker goes out of scope
+    profile.destroy();
 
 #ifdef LUNA_DEBUG_BUILD
     LUNA_LOG("The total allocated memory over the browser runtime: {} bytes", allocation_metrics.total_allocated);
