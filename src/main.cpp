@@ -2599,6 +2599,15 @@ int main(int argc, char *argv[]) {
 
     const int ret = app.exec();
 
+    // Destroy all tab views before destroying the profile,
+    // so no QWebEnginePages reference the profile when it's deleted.
+    for (int i = browser.tabs->count() - 1; i >= 0; --i) {
+        auto *w = browser.tabs->widget(i);
+        browser.tabs->removeTab(i);
+        delete w;
+    }
+    browser.tabs_count = 0;
+
     // Destroy the web engine profile (and its interceptors) before adblocker goes out of scope
     profile.destroy();
 
