@@ -389,7 +389,15 @@ struct StatusBar: QWidget {
         this->position->setText(text);
     }
 
-    void set_load_time(const QString &text) {
+    void set_load_time(const uint64_t elapsed) {
+        QString text;
+        if (elapsed < 1000) {
+            text = QString("%1ms").arg(elapsed);
+        } else if (elapsed < 60000) {
+            text = QString("%1sec").arg(elapsed / 1000.0, 0, 'f', 2);
+        } else {
+            text = QString("%1min").arg(elapsed / 60000.0, 0, 'f', 2);
+        }
         this->load_time->setText(text);
     }
 };
@@ -2058,16 +2066,8 @@ struct LunaBrowser: QMainWindow {
             auto *tab_body = static_cast<TabBody*>(parent);
             const auto current_idx = tab_body ? this->tabs->indexOf(tab_body) : -1;
             if (current_idx == this->tabs->currentIndex() && tab_body) {
-                const qint64 elapsed = tab_body->load_timer.elapsed();
-                QString text;
-                if (elapsed < 1000) {
-                    text = QString("%1ms").arg(elapsed);
-                } else if (elapsed < 60000) {
-                    text = QString("%1sec").arg(elapsed / 1000.0, 0, 'f', 2);
-                } else {
-                    text = QString("%1min").arg(elapsed / 60000.0, 0, 'f', 2);
-                }
-                this->status_bar->set_load_time(text);
+                const uint64_t elapsed = tab_body->load_timer.elapsed();
+                this->status_bar->set_load_time(elapsed);
                 this->status_bar->set_progress(progress);
             }
         });
@@ -2389,10 +2389,15 @@ struct LunaBrowser: QMainWindow {
 
     void on_focus() {
         {
-            auto *v = this->active_tab()->active_veiw();
-            this->update_tab_title(dynamic_cast<TabBody*>(v));
+            auto *tab_body = this->active_tab();
+            if (!tab_body) return;
+            auto *v = tab_body->active_veiw();
+            if (!v) return;
+            this->update_tab_title(tab_body);
             // update the status bar
             this->status_bar->url->setText(v->url().toString());
+            const uint64_t elapsed = tab_body->load_timer.elapsed();
+            this->status_bar->set_load_time(elapsed);
         }
     }
 
@@ -2500,7 +2505,7 @@ struct LunaBrowser: QMainWindow {
         if (cmd.startsWith(":")) {
             cmd = cmd.mid(1); // skip the ':'
         }
-        LUNA_LOG("Command: `{}`", cmd.toStdString());
+        LUNA_DEBUG("Command: `{}`", cmd.toStdString());
 
         QString cmd_name;
         QString args;
