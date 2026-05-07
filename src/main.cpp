@@ -1783,8 +1783,8 @@ struct LunaBrowser: QMainWindow {
         if (title.isEmpty()) title = "Luna";
         if (tab_body->tag == TabBodyStateTag::SplitedTagBodyState && tab_body->val.splitter) {
             int active_idx = tab_body->val.splitter->indexOf(active);
-            if (active_idx >= THE_ZERO) {
-                int other_idx = (active_idx == THE_ZERO) ? 1 : THE_ZERO;
+            if (active_idx >= 0) {
+                const auto other_idx = (active_idx == THE_ZERO) ? 1 : THE_ZERO;
                 title = QString("%1|%2: %3").arg(other_idx + 1).arg(active_idx + 1).arg(title);
             }
         } else {
@@ -2174,9 +2174,7 @@ struct LunaBrowser: QMainWindow {
     bool handle_key_press_event(const QKeyEvent *e) {
         const auto key = e->key();
         const auto mods = e->modifiers();
-        std::print("keyPressEvent: {}\n",
-               QKeySequence(mods | key).toString().toStdString());
-        // if (cmd->isVisible()) return;
+        LUNA_DEBUG("keyPressEvent: {}\n", QKeySequence(mods | key).toString().toStdString());
         if (this->mode == BrowserMode::NormieMode) {
             if (mods & Qt::ControlModifier & Qt::ShiftModifier) {
                 if (key == Qt::Key_Escape) {
@@ -2184,7 +2182,7 @@ struct LunaBrowser: QMainWindow {
                     return true; // ayoo
                 }
             }
-            std::print("NormieMode is enabled: forward all keys to the webpage\n");
+            LUNA_LOG("{}", "NormieMode is enabled: forward all keys to the webpage\n");
             return false;
         }
 
