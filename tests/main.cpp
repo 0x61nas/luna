@@ -14,6 +14,11 @@ int test_cache();
 int test_get_hiding_rules_for_domain();
 int test_load_all_filter_lists();
 int test_block_request_combinations();
+int test_youtube_ads();
+#if __has_include("real_network_ads.h")
+#include "real_network_ads.h"
+int test_real_network_ads();
+#endif
 
 #define LUNA_TEST_ASSERT(cond) \
     do { \
@@ -56,6 +61,14 @@ int run_tests() {
 
     printf("\nTesting block_request argument combinations...\n");
     failed_tests += test_block_request_combinations();
+
+    // printf("\nTesting YouTube ad blocking...\n");
+    // failed_tests += test_youtube_ads();
+
+#if __has_include("real_network_ads.h")
+    printf("\nTesting real network ads...\n");
+    failed_tests += test_real_network_ads();
+#endif
 
     return failed_tests;
 }
@@ -389,6 +402,25 @@ int test_cache() {
 
     return luna_failed_tests;
 }
+
+#if __has_include("real_network_ads.h")
+int test_real_network_ads() {
+    int luna_failed_tests = 0;
+    const char* lists[] = {
+        "tests/easylist.txt", "tests/easyprivacy.txt", "tests/uboFilters.txt",
+        "tests/yt-shorts.txt", "tests/unbreak.txt", "tests/quick-fixes.txt"
+    };
+
+    LunaAdBlocker ab(std::filesystem::path("not_used_real"));
+    for (auto f : lists) ab.parse_list_file(f);
+
+    for (int i = 0; REAL_AD_LINKS[i] != nullptr; i++) {
+        LUNA_TEST_ASSERT(ab.block_request(REAL_AD_LINKS[i]) == true);
+    }
+
+    return luna_failed_tests;
+}
+#endif
 
 int test_get_hiding_rules_for_domain() {
     int luna_failed_tests = 0;
