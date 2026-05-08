@@ -15,7 +15,7 @@ build EXTRA_CXXFLAGS='-ggdb -O0 -DLUNA_DEBUG_BUILD':
 
 test EXTRA_CXXFLAGS='-ggdb -O0':
     [[ -d {{BUILD_DIR}} ]] || mkdir -p {{BUILD_DIR}}
-    {{CXX}} {{CXXFLAGS}} {{EXTRA_CXXFLAGS}} tests/main.cpp -o {{BUILD_DIR}}/luna-test $(pkg-config {{PFLAGS}} {{PLIBS}})
+    {{CXX}} {{CXXFLAGS}} {{EXTRA_CXXFLAGS}} tests/main.cc -o {{BUILD_DIR}}/luna-test $(pkg-config {{PFLAGS}} {{PLIBS}})
     {{BUILD_DIR}}/luna-test
 
 build-realease EXTRA_CXXFLAGS='-O3': 
