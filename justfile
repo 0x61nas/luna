@@ -1,5 +1,5 @@
 
-NAME := 'luna'
+REPO_NAME := 'luna'
 
 CXX := env_var_or_default('CXX', 'g++')
 CXXFLAGS := env_var_or_default('CXXFLAGS', '-fPIC -std=c++23 -Wall -Wextra')
@@ -53,6 +53,32 @@ download-filters:
 install:
     just build-realease
     {{SU}} 'install -Dm755 {{BUILD_DIR}}/luna-browser {{DESTDIR}}/luna-browser'
+
+setup-remotes:
+    git remote add github git@github.com:0x61nas/{{REPO_NAME}}.git
+    git remote add gitlab git@gitlab.com:anelgarhy/{{REPO_NAME}}.git
+    git remote add codeberg ssh://git@codeberg.org/0x61nas/{{REPO_NAME}}.git
+    git remote add disroot ssh://git@git.disroot.org/anas/{{REPO_NAME}}.git
+    git remote add tangled git@tangled.org:anas.tngl.sh/{{REPO_NAME}}
+    git remote add codefloe ssh://git@codefloe.com/anas/{{REPO_NAME}}.git
+
+# Push the code to all remotes
+push FLAGS="-u" BRANSH="aurora":
+    git push {{FLAGS}} github {{BRANSH}}
+    git push {{FLAGS}} gitlab {{BRANSH}}
+    git push {{FLAGS}} codeberg {{BRANSH}}
+    git push {{FLAGS}} disroot {{BRANSH}}
+    git push {{FLAGS}} tangled {{BRANSH}}
+    git push {{FLAGS}} codefloe {{BRANSH}}
+
+# Push the git tags to all remotes
+pusht: push
+    git push --tags github
+    git push --tags gitlab
+    git push --tags codeberg
+    git push --tags disroot
+    git push --tags tangled
+    git push --tags codefloe
 
 clean:
     git clean -ffdx
