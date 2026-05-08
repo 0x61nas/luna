@@ -2603,11 +2603,13 @@ int main(int argc, char *argv[]) {
         const auto remove_yt_shorts = "https://raw.githubusercontent.com/brave/adblock-lists/refs/heads/master/brave-lists/yt-shorts.txt";
         const auto unbreak_url = "https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/unbreak.txt";
         const auto quick_fixes_url = "https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/quick-fixes.txt";
+        const auto adguard_adservers = "https://raw.githubusercontent.com/AdguardTeam/AdguardFilters/refs/heads/master/BaseFilter/sections/adservers.txt";
         const auto default_lists = {
             easylist_url,
             easyprivacy_url,
             remove_yt_shorts,
             ubo_filters_url,
+            adguard_adservers,
             // "file:///home/anas/code/luna/test_rules.txt",
             unbreak_url,
             quick_fixes_url,
