@@ -2386,6 +2386,19 @@ struct LunaBrowser: QMainWindow {
         } else if (event->type() == QEvent::FocusOut) {
             // std::print("focus has changed out\n");
             return false;
+        } else if (event->type() == QEvent::MouseButtonPress) {
+            auto *me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton && this->mode == BrowserMode::NormalMode) {
+                QObject *target = obj;
+                while (target) {
+                    if (qobject_cast<QWebEngineView*>(target)) {
+                        this->update_mode(BrowserMode::InsertMode);
+                        break;
+                    }
+                    target = target->parent();
+                }
+            }
+            return false;
         }
 
         return QObject::eventFilter(obj, event);
