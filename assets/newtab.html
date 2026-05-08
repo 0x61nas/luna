@@ -55,6 +55,21 @@
             border-color:rgba(255,255,255,.25);
             box-shadow:0 0 15px var(--accent);
         }
+        .search-btn {
+            padding:.6rem 1.2rem;
+            border-radius:999px;
+            border:1px solid rgba(255,255,255,.08);
+            background:var(--bg-soft);
+            color:var(--fg);
+            font-size:1rem;
+            cursor:pointer;
+            transition:.15s;
+            white-space:nowrap;
+        }
+        .search-btn:hover {
+            background:var(--accent);
+            border-color:rgba(255,255,255,.25);
+        }
         .grid {
             margin-top:2.5rem;
             display:grid;
@@ -95,8 +110,11 @@
         <body>
         <div class="container">
         <div class="moon"></div>
-        <form action="https://duckduckgo.com/">
-        <input class="search" name="q" placeholder="Search..." autofocus>
+        <form id="search-form">
+        <div style="display:flex;gap:8px">
+        <input class="search" id="search-input" type="text" placeholder="Search..." autofocus style="flex:1">
+        <button type="submit" class="search-btn" id="search-btn">Go</button>
+        </div>
         </form>
         <div class="grid" id="grid"></div>
         </div>
@@ -118,6 +136,11 @@
         a.className="item";
         a.innerHTML=`<div class="icon">${t[0]}</div><div class="title">${t}</div>`;
         g.appendChild(a);
+        });
+        document.getElementById("search-form").addEventListener("submit",function(e){
+        e.preventDefault();
+        const q=document.getElementById("search-input").value.trim();
+        if(q)window.location.href="https://duckduckgo.com/?q="+encodeURIComponent(q);
         });
         </script>
         </body>
