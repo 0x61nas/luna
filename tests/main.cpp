@@ -414,9 +414,44 @@ int test_real_network_ads() {
     LunaAdBlocker ab(std::filesystem::path("not_used_real"));
     for (auto f : lists) ab.parse_list_file(f);
 
-    for (int i = 0; REAL_AD_LINKS[i] != nullptr; i++) {
-        LUNA_TEST_ASSERT(ab.block_request(REAL_AD_LINKS[i]) == true);
+    const char *current_cat_id = "";
+    const char *current_svc = "";
+    int cat_total = 0, cat_failed = 0;
+    int svc_total = 0, svc_failed = 0;
+
+    for (int i = 0; AD_TESTS[i].url != nullptr; i++) {
+        const auto &e = AD_TESTS[i];
+
+        if (strcmp(e.category_id, current_cat_id) != 0) {
+            if (i > 0) printf("  category: %d/%d passed\n", cat_total - cat_failed, cat_total);
+            current_cat_id = e.category_id;
+            current_svc = "";
+            cat_total = 0; cat_failed = 0;
+            printf("\n>>> [%s] %s\n", e.category_id, e.category_name);
+        }
+
+        if (strcmp(e.service, current_svc) != 0) {
+            if (svc_total > 0) printf("    service: %d/%d passed\n", svc_total - svc_failed, svc_total);
+            current_svc = e.service;
+            svc_total = 0; svc_failed = 0;
+            printf("\n  --- %s ---\n", e.service);
+        }
+
+        bool blocked = ab.block_request(e.url);
+        if (blocked) {
+            printf("    [PASS] %s\n", e.url);
+        } else {
+            printf("    [FAIL] %s  <-- NOT BLOCKED\n", e.url);
+            luna_failed_tests++;
+            cat_failed++;
+            svc_failed++;
+        }
+        cat_total++;
+        svc_total++;
     }
+
+    if (svc_total > 0) printf("    service: %d/%d passed\n", svc_total - svc_failed, svc_total);
+    if (cat_total > 0) printf("  category: %d/%d passed\n", cat_total - cat_failed, cat_total);
 
     return luna_failed_tests;
 }
