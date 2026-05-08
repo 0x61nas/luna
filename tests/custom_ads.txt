@@ -1,0 +1,265 @@
+! Custom ad blocking rules for URLs not covered by existing filter lists
+! Rules without $third-party to work in test context (no document domain)
+
+! Google / DoubleClick
+||googleadservices.com^
+||afs.googlesyndication.com^
+||google-analytics.com^
+
+! Amazon
+||analyticsengine.s3.amazonaws.com^
+||analytics.s3.amazonaws.com^
+
+! Microsoft
+||analytics.microsoft.com^
+||c.bing.com^
+||cdn.ads.microsoft.com^
+||bingads.microsoft.com^
+
+! Yahoo / Oath
+||adtech.yahooinc.com^
+||udc.yahoo.com^
+||udcm.yahoo.com^
+||analytics.query.yahoo.com^
+||partnerads.ysm.yahoo.com^
+||gemini.yahoo.com^
+||log.fc.yahoo.com^
+
+! Criteo
+||criteo.com^
+||criteo.net^
+
+! Taboola
+||taboola.com^
+
+! Outbrain
+||outbrain.com^
+
+! Media.net
+||media.net^
+
+! The Trade Desk
+||adsrvr.org^
+
+! Sovrn / Lijit
+||ce.lijit.com^
+||vap.lijit.com^
+||gslbeacon.lijit.com^
+
+! Adobe
+||assets.adobedtm.com^
+||sstats.adobe.com^
+
+! Hotjar
+||hotjar.com^
+||hotjar.io^
+
+! Segment
+||segment.com^
+||segment.io^
+||segmentapis.com^
+
+! Mixpanel
+||cdn.mxpnl.com^
+
+! Amplitude
+||amplitude.com^
+
+! Mouseflow
+||mouseflow.com^
+
+! Lucky Orange
+||luckyorange.com^
+||luckyorange.net^
+
+! Heap
+||heapanalytics.com^
+
+! Plausible / Matomo
+||plausible.io^
+||cdn.matomo.cloud^
+
+! Meta / Facebook
+||connect.facebook.net^
+||an.facebook.com^
+||graph.facebook.com^
+
+! TikTok
+||ads-api.tiktok.com^
+||ads-sg.tiktok.com^
+||business-api.tiktok.com^
+||byteoversea.com^
+||tiktokv.com^
+
+! X / Twitter
+||analytics.twitter.com^
+||ads-api.twitter.com^
+
+! LinkedIn
+||snap.licdn.com^
+
+! Pinterest
+||analytics.pinterest.com^
+||trk.pinterest.com^
+
+! Quora / Nextdoor
+||q.quora.com^
+||ads-api.nextdoor.com^
+||pixel.nextdoor.com^
+
+! Adjust
+||adjust.com^
+||adjust.net^
+||adjust.world^
+
+! AppsFlyer
+||cdn-settings.appsflyersdk.com^
+
+! Branch
+||branch.io^
+
+! Kochava
+||kochava.com^
+
+! Unity Ads
+||unityads.unity3d.com^
+
+! AppLovin
+||applovin.com^
+
+! Vungle / Liftoff
+||vungle.com^
+
+! ironSource / Fyber
+||supersonicads.com^
+||inner-active.mobi^
+
+! Chartboost
+||chartboost.com^
+
+! AdColony
+||adcolony.com^
+
+! Mintegral / Rayjump
+||mintegral.com^
+||rayjump.com^
+
+! InMobi
+||inmobicdn.net^
+
+! Sentry
+||sentry-cdn.com^
+||getsentry.com^
+||sentry.io^
+
+! Bugsnag
+||bugsnag.com^
+
+! Datadog
+||browser-intake-datadoghq.eu^
+
+! New Relic
+||nr-data.net^
+
+! Rollbar / Raygun
+||rollbar.com^
+||raygun.io^
+
+! LogRocket
+||lr-ingest.com^
+||logrocket.com^
+||logrocket.io^
+
+! Awin / Zanox
+||awin1.com^
+||zanox-affiliate.de^
+||zanox.com^
+
+! Rakuten / LinkShare
+||linksynergy.com^
+
+! Tradedoubler
+||tradedoubler.com^
+
+! Webgains / Partnerize
+||webgains.com^
+||webgains.org^
+||prf.hn^
+||myvisualiq.net^
+
+! CJ / ShareASale / Impact
+||emjcd.com^
+||anrdoezrs.net^
+||shareasale.com^
+||impact.com^
+
+! Xiaomi
+||mistat.xiaomi.com^
+||tracking.rus.miui.com^
+
+! Samsung
+||112.2o7.net^
+
+! Huawei
+||metrics.data.hicloud.com^
+||metrics2.data.hicloud.com^
+||grs.hicloud.com^
+
+! Oppo / Realme / OnePlus
+||adsfs.oppomobile.com^
+||adx.ads.oppomobile.com^
+||ck.ads.oppomobile.com^
+||data.ads.oppomobile.com^
+||iot-eu-logser.realme.com^
+||bdapi-ads.realmemobile.com^
+||open.oneplus.net^
+
+! Apple
+||iadsdk.apple.com^
+||api-adservices.apple.com^
+||books-analytics-events.apple.com^
+||weather-analytics-events.apple.com^
+||notes-analytics-events.apple.com^
+
+! Roku / LG / Vizio
+||p.ads.roku.com^
+||scribe.logs.roku.com^
+||tvinteractive.tv^
+
+! Yandex
+||appmetrica.yandex.ru^
+||adfstat.yandex.ru^
+||metrika.yandex.ru^
+||offerwall.yandex.net^
+
+! Baidu
+||hm.baidu.com^
+||cpro.baidu.com^
+
+! Tencent / Alibaba
+||tajs.qq.com^
+||e.qq.com^
+||acjs.aliyun.com^
+
+! Kakao / Naver
+||adcr.naver.com^
+||wcs.naver.net^
+||adimg3.search.naver.net^
+
+! Vietnam
+||adtimaserver.vn^
+
+! VK
+||vk-ads.com^
+
+! OneTrust
+||geolocation.onetrust.com^
+||privacyportal.onetrust.com^
+||cookie-cdn.cookiepro.com^
+
+! Cookiebot
+||cookiebot.com^
+
+! Sourcepoint / Didomi
+||privacy-mgmt.com^
+||privacy-center.org^

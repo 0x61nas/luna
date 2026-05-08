@@ -348,6 +348,110 @@ int test_block_request_combinations() {
     return luna_failed_tests;
 }
 
+int test_youtube_ads() {
+    int luna_failed_tests = 0;
+
+    const char* lists[] = {
+        "tests/easylist.txt", "tests/easyprivacy.txt", "tests/uboFilters.txt",
+        "tests/yt-shorts.txt", "tests/unbreak.txt", "tests/quick-fixes.txt"
+    };
+
+    // Test 1: Known YouTube ad/service URLs that MUST be blocked
+    printf("\n--- YouTube ad URLs (should block) ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used_yt1"));
+        for (auto f : lists) ab.parse_list_file(f);
+
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/pagead/ad") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/youtubei/v1/player/ad_break") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/api/stats/ads?event=ad") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/api/stats/qoe?page&ns=yt&fexp=v1&event=streamingstats") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/ptracking?html5=1&video_id=abc&cpn=def&ei=ghi&ptk=youtube_foo&pltype=content") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/get_video_info?video_id=xxx&adunit=yyy", 0, "www.youtube.com") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/get_midroll_", 0, "www.youtube.com") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://m.youtube.com/get_midroll_", 0, "www.youtube.com") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://googleads.g.doubleclick.net/pagead/ads") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://pubads.g.doubleclick.net/gampad/ads") == true);
+    }
+
+    // Test 2: Known YouTube content URLs that MUST NOT be blocked
+    printf("\n--- YouTube content URLs (should NOT block) ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used_yt2"));
+        for (auto f : lists) ab.parse_list_file(f);
+
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://youtu.be/dQw4w9WgXcQ") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/youtubei/v1/player?key=AIzaSyA") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/get_video_info?video_id=xxx") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://i.ytimg.com/vi/xxx/maxresdefault.jpg") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://yt3.ggpht.com/ytc/xxx") == false);
+    }
+
+    // Test 3: Resource type + document domain variations on YouTube ads
+    printf("\n--- YouTube ad URLs with resource type and document domain ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used_yt3"));
+        for (auto f : lists) ab.parse_list_file(f);
+
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/get_video_info?video_id=xxx&adunit=yyy") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/get_video_info?video_id=xxx&adunit=yyy", 0, "www.youtube.com") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/get_video_info?video_id=xxx&adunit=yyy", 1 << 0, "www.youtube.com") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/get_video_info?video_id=xxx&adunit=yyy", 0, "google.com") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/get_video_info?video_id=xxx") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/get_video_info?video_id=xxx", 0, "www.youtube.com") == false);
+    }
+
+    // Test 4: googlevideo.com CDN ad requests
+    printf("\n--- googlevideo.com ad requests ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used_yt4"));
+        for (auto f : lists) ab.parse_list_file(f);
+
+        LUNA_TEST_ASSERT(ab.block_request("https://r1---sn-abc.googlevideo.com/initplayback?source=youtube&c=TVHTML5&oad=1", 1 << 5, "www.youtube.com") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://r2---sn-xyz.googlevideo.com/initplayback?source=youtube&c=TVHTML5&oad=1", 1 << 5, "www.youtube.com") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://r1---sn-abc.googlevideo.com/initplayback?source=youtube&c=TVHTML5&oad=1") == false);
+        LUNA_TEST_ASSERT(ab.block_request("https://r1---sn-abc.googlevideo.com/initplayback?source=youtube&c=TVHTML5", 1 << 5, "www.youtube.com") == false);
+    }
+
+    // Test 5: Exception rules — timedtext_editor (exception is commented out in uboFilters.txt)
+    printf("\n--- YouTube exception rules ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used_yt5"));
+        for (auto f : lists) ab.parse_list_file(f);
+
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/get_video_info?video_id=xxx&adunit=yyy", 0, "www.youtube.com") == true);
+        LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/get_video_info?video_id=xxx&adunit=yyy&timedtext_editor=1", 0, "www.youtube.com") == true);
+    }
+
+    // Test 6: Content hiding rules — YouTube domain
+    printf("\n--- YouTube content hiding rules ---\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used_yt6"));
+        for (auto f : lists) ab.parse_list_file(f);
+
+        std::string r_youtube = ab.get_hiding_rules_for_domain("youtube.com");
+        LUNA_TEST_ASSERT(!r_youtube.empty());
+        LUNA_TEST_ASSERT(r_youtube[0] == '[');
+        LUNA_TEST_ASSERT(r_youtube.back() == ']');
+        LUNA_TEST_ASSERT(r_youtube.find("ytd-rich-item-renderer") != std::string::npos);
+        LUNA_TEST_ASSERT(r_youtube.find("ytd-ad-slot-renderer") != std::string::npos);
+        LUNA_TEST_ASSERT(r_youtube.find("#shopping-timely-shelf") != std::string::npos);
+        LUNA_TEST_ASSERT(r_youtube.find("#player-ads") != std::string::npos);
+        LUNA_TEST_ASSERT(r_youtube.find("#masthead-ad") != std::string::npos);
+        LUNA_TEST_ASSERT(r_youtube.find("shreddit-ad-post") == std::string::npos);
+
+        std::string r_reddit = ab.get_hiding_rules_for_domain("reddit.com");
+        LUNA_TEST_ASSERT(r_reddit.find("ytd-rich-item-renderer") == std::string::npos);
+
+        std::string r_unknown = ab.get_hiding_rules_for_domain("somerandomdomain12345.xyz");
+        LUNA_TEST_ASSERT(r_unknown.find("ytd-rich-item-renderer") == std::string::npos);
+    }
+
+    return luna_failed_tests;
+}
+
 int main() {
     printf("=== Luna AdBlocker Test Suite ===\n");
     int ret = run_tests();
@@ -408,7 +512,8 @@ int test_real_network_ads() {
     int luna_failed_tests = 0;
     const char* lists[] = {
         "tests/easylist.txt", "tests/easyprivacy.txt", "tests/uboFilters.txt",
-        "tests/yt-shorts.txt", "tests/unbreak.txt", "tests/quick-fixes.txt"
+        "tests/yt-shorts.txt", "tests/unbreak.txt", "tests/quick-fixes.txt",
+        "tests/custom_ads.txt"
     };
 
     LunaAdBlocker ab(std::filesystem::path("not_used_real"));
