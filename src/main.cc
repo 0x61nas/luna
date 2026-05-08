@@ -1575,7 +1575,10 @@ static void register_luna_scheme() {
     scheme.setFlags(
         QWebEngineUrlScheme::SecureScheme |
         QWebEngineUrlScheme::LocalScheme |
-        QWebEngineUrlScheme::LocalAccessAllowed
+        QWebEngineUrlScheme::LocalAccessAllowed |
+        QWebEngineUrlScheme::ViewSourceAllowed |
+        QWebEngineUrlScheme::ContentSecurityPolicyIgnored |
+        QWebEngineUrlScheme::FetchApiAllowed
     );
     QWebEngineUrlScheme::registerScheme(scheme);
 }
@@ -1698,6 +1701,7 @@ struct LunaBrowserOptions {
     bool force_darkmode = false;
     bool frameless = false;
     bool private_window = false;
+    std::string session_name;
     std::vector<std::string> urls;
     std::vector<std::string> commands;
 };
@@ -1804,12 +1808,13 @@ struct LunaBrowser: QMainWindow {
         this->completer_model = new QStringListModel(this);
         this->base_commands = QStringList({
             "o", "open", "tabopen", "back", "forward", "reload", "stop",
-            "quit", "q", "wq", "undo", "redo", "yank", "paste",
+            "w", "quit", "q", "wq", "undo", "redo", "yank", "paste",
             "tabnew", "tabclose", "tabnext", "tabprev",
             "scroll", "scrollpage", "search", "nohlsearch",
             "bookmark-add", "bookmark-del", "bookmark-list",
             "history", "download", "adblock-enable", "adblock-disable",
             "set", "bind", "unbind", "help",
+            "x", "session-save",
         });
         this->completer_model->setStringList(this->base_commands);
 
@@ -2438,6 +2443,147 @@ struct LunaBrowser: QMainWindow {
         this->tabs->setCurrentIndex(new_idx);
     }
 
+    std::string save_session_to_file(const std::string &name) {
+        std::string filename = name;
+        const std::string ext = ".luna";
+        if (filename.size() < ext.size() || filename.substr(filename.size() - ext.size()) != ext) {
+            filename += ext;
+        }
+
+        const auto sessions_dir = std::filesystem::path(get_app_data_base());
+        if (!std::filesystem::exists(sessions_dir)) {
+            std::filesystem::create_directories(sessions_dir);
+        }
+        const auto file_path = sessions_dir / filename;
+
+        std::ofstream file(file_path);
+        if (!file) {
+            this->last_error = QString("Cannot create session file: %1").arg(QString::fromStdString(file_path.string()));
+            return "";
+        }
+
+        const int tab_count = this->tabs->count();
+        for (int i = 0; i < tab_count; ++i) {
+            auto *tab_body = dynamic_cast<TabBody*>(this->tabs->widget(i));
+            if (!tab_body) continue;
+            auto *v = tab_body->active_veiw();
+            if (!v) continue;
+
+            const QString url = v->url().toString();
+            if (url.isEmpty() || url == LUNA_NEW_TAB_URL) continue;
+
+            const QPointF scroll_pos = v->page()->scrollPosition();
+            const QString search = tab_body->search_term;
+
+            file << url.toStdString() << ","
+                 << scroll_pos.x() << ","
+                 << scroll_pos.y() << ","
+                 << search.toStdString() << "\n";
+        }
+
+        file.close();
+
+        const auto last_session_path = sessions_dir / "last_session";
+        std::ofstream last_file(last_session_path);
+        if (last_file) {
+            last_file << filename;
+            last_file.close();
+        }
+
+        return file_path.string();
+    }
+
+    void load_session_from_file(const std::string &name) {
+        std::string session_name = name;
+        const auto sessions_dir = std::filesystem::path(get_app_data_base());
+        if (session_name.empty()) {
+            const auto last_path = sessions_dir / "last_session";
+            if (std::filesystem::exists(last_path)) {
+                std::ifstream f(last_path);
+                std::getline(f, session_name);
+            }
+            if (session_name.empty()) {
+                return;
+            }
+        }
+
+        std::string filename = session_name;
+        const std::string ext = ".luna";
+        if (filename.size() < ext.size() || filename.substr(filename.size() - ext.size()) != ext) {
+            filename += ext;
+        }
+
+        const auto file_path = sessions_dir / filename;
+        if (!std::filesystem::exists(file_path)) {
+            return;
+        }
+
+        struct SessionEntry {
+            QString url;
+            QPointF scroll_pos;
+            QString search_term;
+        };
+        std::vector<SessionEntry> entries;
+
+        std::ifstream file(file_path);
+        std::string line;
+        while (std::getline(file, line)) {
+            if (line.empty()) continue;
+
+            std::vector<std::string> parts;
+            size_t pos = 0;
+            size_t found;
+            while ((found = line.find(',', pos)) != std::string::npos) {
+                parts.push_back(line.substr(pos, found - pos));
+                pos = found + 1;
+            }
+            parts.push_back(line.substr(pos));
+
+            if (parts.empty() || parts[0].empty()) continue;
+
+            SessionEntry entry;
+            entry.url = QString::fromStdString(parts[0]);
+            if (parts.size() >= 2) entry.scroll_pos.setX(std::stod(parts[1]));
+            if (parts.size() >= 3) entry.scroll_pos.setY(std::stod(parts[2]));
+            if (parts.size() >= 4) entry.search_term = QString::fromStdString(parts[3]);
+            entries.push_back(std::move(entry));
+        }
+        file.close();
+
+        if (entries.empty()) return;
+
+        for (int i = this->tabs->count() - 1; i >= 0; --i) {
+            QWidget *w = this->tabs->widget(i);
+            this->tabs->removeTab(i);
+            this->tabs_count--;
+            delete w;
+        }
+        this->tabs_count = 0;
+
+        for (const auto &entry : entries) {
+            auto *tab_body = this->new_tab(this->profile.web_engine_profile, entry.url.toStdString().c_str(), false);
+            if (auto *v = tab_body->active_veiw()) {
+                QPointF scroll_pos = entry.scroll_pos;
+                QString search_term = entry.search_term;
+                QObject::connect(v, &QWebEngineView::loadFinished, this, [v, scroll_pos, search_term, tab_body]() {
+                    if (scroll_pos.x() != 0 || scroll_pos.y() != 0) {
+                        v->page()->runJavaScript(QString("window.scrollTo(%1, %2);")
+                            .arg(scroll_pos.x())
+                            .arg(scroll_pos.y()));
+                    }
+                    if (!search_term.isEmpty()) {
+                        tab_body->search_term = search_term;
+                        v->page()->findText(search_term, QWebEnginePage::FindFlags(), [](const QWebEngineFindTextResult &) {});
+                    }
+                });
+            }
+        }
+
+        if (this->tabs->count() > 0) {
+            this->tabs->setCurrentIndex(0);
+        }
+    }
+
     bool run_cmd(const BrowserCommands command, const QString &args) {
         auto *v = this->active_tab() ? this->active_tab()->active_veiw() : nullptr;
         switch (command) {
@@ -2471,6 +2617,19 @@ struct LunaBrowser: QMainWindow {
                 if (v) { v->stop(); return true; }
                 this->last_error = "No active view to stop";
                 return false;
+            case BrowserCommands::SaveAndQuiteCommmand: {
+                {
+                    std::string session_name = args.isEmpty() ? "default" : args.toStdString();
+                    this->save_session_to_file(session_name);
+                }
+                QApplication::quit();
+                return true;
+            }
+            case BrowserCommands::SaveSessionCommand: {
+                std::string session_name = args.isEmpty() ? "default" : args.toStdString();
+                this->save_session_to_file(session_name);
+                return true;
+            }
             case BrowserCommands::CloseTabCommand:
                 this->close_tab(this->tabs->currentIndex());
                 return true;
@@ -2519,6 +2678,10 @@ struct LunaBrowser: QMainWindow {
             browser_command = BrowserCommands::StopCommand;
         } else if (cmd_name == "close" || cmd_name == "tabclose") {
             browser_command = BrowserCommands::CloseTabCommand;
+        } else if (cmd_name == "wq" || cmd_name == "x") {
+            browser_command = BrowserCommands::SaveAndQuiteCommmand;
+        } else if (cmd_name == "w'|| cmd_name == "session-save") {
+            browser_command = BrowserCommands::SaveSessionCommand;
         }
 
         bool success = this->run_cmd(browser_command, args);
@@ -2547,6 +2710,7 @@ void print_help(const char *bin) {
         "  --force-darkmode           Force the dark mode on all web pages\n"
         "  --private-window           Open a private window\n"
         "  -p, --profile <profile>    Load a specific profile\n"
+        "  -s, --session <name>       Restore a specific saved session\n"
         "  --freamless                Open window with no tab/status bar\n\n"
 
         "Arguments:\n"
@@ -2594,6 +2758,10 @@ int main(int argc, char *argv[]) {
             }
             const auto name = argv[++i];
             profile_name = name;
+        } else if (s == "-s" || s == "--session") {
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                opts.session_name = argv[++i];
+            }
         } else if (s == "--private-window") {
             opts.private_window = true;
         } else if (!s.empty() && s[0] == '+') {
@@ -2668,6 +2836,8 @@ int main(int argc, char *argv[]) {
     app.installEventFilter(&browser);
     browser.prepare();
     browser.show();
+
+    browser.load_session_from_file(opts.session_name);
 
     const int ret = app.exec();
 
