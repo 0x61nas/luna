@@ -38,14 +38,9 @@ collect-ad-links EXTRA_CXXFLAGS='-ggdb -O0':
     [[ -d {{BUILD_DIR}} ]] || mkdir -p {{BUILD_DIR}}
     {{CXX}} {{CXXFLAGS}} {{EXTRA_CXXFLAGS}} scripts/collect_ad_links.cc -o {{BUILD_DIR}}/collect-ad-links $(pkg-config {{PFLAGS}} {{PLIBS}})
     {{BUILD_DIR}}/collect-ad-links
-    mv results.txt {{BUILD_DIR}}
 
 gen-real-ad-links:
-    printf '%s\n' '#pragma once' '' 'const char* REAL_AD_LINKS[] = {' > tests/real_network_ads.h
-    grep -v '^===' {{BUILD_DIR}}/results.txt | grep -v '^[[:space:]]*$$' | sort -u | sed 's/"/\\"/g' | sed 's/^/  "/' | sed 's/$$/",/' >> tests/real_network_ads.h
-    printf '%s\n' '  nullptr' '};' >> tests/real_network_ads.h
-
-test-real-ads: collect-ad-links gen-real-ad-links test
+    python3 scripts/gen_ad_links_header.py
 
 download-filters:
     curl -L -o {{justfile_directory()}}/tests/easylist.txt https://easylist.to/easylist/easylist.txt
