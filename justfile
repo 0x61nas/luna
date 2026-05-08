@@ -34,8 +34,26 @@ sanitize SANITIZER='address,undefined':
     clang++ {{CXXFLAGS}} -O0 -g -fsanitize={{SANITIZER}} src/main.cpp -o {{BUILD_DIR}}/luna-browser-santize $(pkg-config {{PFLAGS}} {{PLIBS}})
     LSAN_OPTIONS=suppressions=lsan_suppr.txt {{BUILD_DIR}}/luna-browser-santize
 
-download-easylist:
-    curl -O https://easylist.to/easylist/easylist.txt
+collect-ad-links EXTRA_CXXFLAGS='-ggdb -O0':
+    [[ -d {{BUILD_DIR}} ]] || mkdir -p {{BUILD_DIR}}
+    {{CXX}} {{CXXFLAGS}} {{EXTRA_CXXFLAGS}} scripts/collect_ad_links.cc -o {{BUILD_DIR}}/collect-ad-links $(pkg-config {{PFLAGS}} {{PLIBS}})
+    {{BUILD_DIR}}/collect-ad-links
+    mv results.txt {{BUILD_DIR}}
+
+gen-real-ad-links:
+    printf '%s\n' '#pragma once' '' 'const char* REAL_AD_LINKS[] = {' > tests/real_network_ads.h
+    grep -v '^===' {{BUILD_DIR}}/results.txt | grep -v '^[[:space:]]*$$' | sort -u | sed 's/"/\\"/g' | sed 's/^/  "/' | sed 's/$$/",/' >> tests/real_network_ads.h
+    printf '%s\n' '  nullptr' '};' >> tests/real_network_ads.h
+
+test-real-ads: collect-ad-links gen-real-ad-links test
+
+download-filters:
+    curl -L -o {{justfile_directory()}}/tests/easylist.txt https://easylist.to/easylist/easylist.txt
+    curl -L -o {{justfile_directory()}}/tests/easyprivacy.txt https://easylist.to/easylist/easyprivacy.txt
+    curl -L -o {{justfile_directory()}}/tests/uboFilters.txt https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/filters.txt
+    curl -L -o {{justfile_directory()}}/tests/yt-shorts.txt https://raw.githubusercontent.com/brave/adblock-lists/refs/heads/master/brave-lists/yt-shorts.txt
+    curl -L -o {{justfile_directory()}}/tests/unbreak.txt https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/unbreak.txt
+    curl -L -o {{justfile_directory()}}/tests/quick-fixes.txt https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/quick-fixes.txt
 
 install:
     just build-realease
