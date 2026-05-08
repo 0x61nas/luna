@@ -589,6 +589,10 @@ struct LunaAdBlockerRuleOptions {
     bool not_third_party = false;
     bool match_case = false;
     bool domain_anchor = false;
+    bool cname_only = false;
+    bool generichide = false;
+    bool specifichide = false;
+    bool has_unrecognized = false;
 };
 
 struct LunaAdBlockerRule {
@@ -683,7 +687,7 @@ struct LunaAdBlockerRule {
             try {
                 rule.regex_pattern = std::make_unique<std::regex>(regex_str, flags);
             } catch (const std::regex_error& e) {
-                rule.is_regex = false;
+                rule.is_regex = false; // if the regex is bad just IGNORE it
             }
             return rule;
         }
@@ -768,6 +772,26 @@ struct LunaAdBlockerRule {
                 options.match_case = true;
             } else if (tok == "domain") {
                 // handled above with key=value
+            } else if (tok == "cname") {
+                options.cname_only = true;
+            } else if (tok == "generichide") {
+                options.generichide = true;
+            } else if (tok == "specifichide") {
+                options.specifichide = true;
+            } else if (tok == "redirect" || tok == "redirect-rule" ||
+                       tok == "important" || tok == "badfilter" ||
+                       tok == "denyallow" || tok == "header" ||
+                       tok == "method" || tok == "all" ||
+                       tok == "popunder" || tok == "empty" ||
+                       tok == "mp4" || tok == "doc" ||
+                       tok == "other" || tok == "frame" ||
+                       tok == "inline-script" || tok == "csp" ||
+                       tok == "prefetch" || tok == "jsonprune" ||
+                       tok == "minify" || tok == "replace" ||
+                       tok == "noop") {
+                // Known but non-functional options - skip without marking unrecognized
+            } else {
+                options.has_unrecognized = true;
             }
 
             if (bit) {
@@ -798,9 +822,14 @@ struct LunaAdBlockerRule {
     }
 
     bool match(std::string_view url, uint32_t resource_type = 0, std::string_view document_domain = "") {
+        // Skip rules with options we don't support (they wouldn't match correctly)
+        if (this->options.has_unrecognized) return false;
+        if (this->options.cname_only) return false;
+        if (this->options.generichide || this->options.specifichide) return false;
+
         // Check resource type
         if (this->options.resource_mask != 0) {
-            if (resource_type == 0) return false;
+            if (resource_type == 0) return false; // for tests
             if (!(this->options.resource_mask & resource_type)) {
                 return false;
             }
@@ -808,7 +837,8 @@ struct LunaAdBlockerRule {
 
         // Check third-party
         if (this->options.third_party || this->options.not_third_party) {
-            bool is_third_party = !document_domain.empty() && !is_same_domain(url, document_domain);
+            if (document_domain.empty()) return false;
+            bool is_third_party = !is_same_domain(url, document_domain);
             if (this->options.third_party && !is_third_party) return false;
             if (this->options.not_third_party && is_third_party) return false;
         }
