@@ -757,6 +757,10 @@ struct LunaAdBlockerRule {
             else if (tok == "websocket") bit = 1 << 6;
             else if (tok == "webrtc") bit = 1 << 7;
             else if (tok == "popup") bit = 1 << 8;
+            else if (tok == "ping") bit = 1 << 9;
+            else if (tok == "font") bit = 1 << 10;
+            else if (tok == "media") bit = 1 << 11;
+            else if (tok == "document") bit = 1 << 12;
             else if (tok == "third-party" || tok == "3p") {
                 if (neg) options.not_third_party = true;
                 else options.third_party = true;
@@ -2598,6 +2602,7 @@ int main(int argc, char *argv[]) {
         const auto ubo_filters_url = "https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/filters.txt";
         const auto remove_yt_shorts = "https://raw.githubusercontent.com/brave/adblock-lists/refs/heads/master/brave-lists/yt-shorts.txt";
         const auto unbreak_url = "https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/unbreak.txt";
+        const auto quick_fixes_url = "https://raw.githubusercontent.com/uBlockOrigin/uAssets/refs/heads/master/filters/quick-fixes.txt";
         const auto default_lists = {
             easylist_url,
             easyprivacy_url,
@@ -2605,6 +2610,7 @@ int main(int argc, char *argv[]) {
             ubo_filters_url,
             // "file:///home/anas/code/luna/test_rules.txt",
             unbreak_url,
+            quick_fixes_url,
         };
         adblocker.setup(default_lists);
         LUNA_DEBUG("Adblocker initialized with: {} network_rules, {} network_exception_rules, {}, content_rules", adblocker.network_rules.size(), adblocker.network_exception_rules.size(), adblocker.content_rules.size());
