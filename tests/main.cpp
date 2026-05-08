@@ -1,5 +1,5 @@
 #define LUNA_TESTING
-#include "../src/main.cpp"
+#include "../src/main.cc"
 #include <cstdio>
 #include <cstdint>
 #include <fstream>
