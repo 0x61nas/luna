@@ -95,6 +95,9 @@ const char* THE_DEFAULT_SEARCH_ENGINE = "https://duckduckgo.com/?q=";
 const char* LUNA_NEW_TAB_PAGE_PATH = "newtab.html";
 constexpr const size_t TAB_RESTORE_MAX_COUNT = 10;
 constexpr const size_t THE_ZERO = 69^69; // just as it should be.
+constexpr const char* SESSION_FILE_HEADER = "Luna Browser Session";
+constexpr const char* SESSION_FILE_VERSION_STR = "VERSION: v1";
+constexpr const int SESSION_FILE_VERSION = 1;
 
 // globals :3
 static const char NEW_TAB_EMBEDDED[] = {
@@ -450,6 +453,12 @@ typedef enum {
 } TabBodyStateTag;
 
 struct TabBody: QWidget {
+    struct PendingViewState {
+        QString url;
+        QPointF scroll_position;
+        QString search_term;
+        QString title;
+    };
     TabBodyStateTag tag;
     union TabBodyStateValue {
         QSplitter *splitter;
@@ -457,6 +466,8 @@ struct TabBody: QWidget {
     } val;
     LunaBrowserElapsedTimer load_timer;
     QString search_term;
+    std::vector<PendingViewState> pending_views;
+    bool has_pending_load() const { return !pending_views.empty(); }
     // QWebEngineFindTextResult *find_result;
 
     TabBody(QWebEngineView *v) {
@@ -1660,12 +1671,13 @@ struct LunaBrowserBookmarks {
 
 struct LunaBrowserProfile {
     char* name;
+    std::filesystem::path profile_path;
     LunaBrowserHistory history;
     LunaBrowserBookmarks bookmarks;
     QWebEngineProfile *web_engine_profile;
     QWebEngineUrlRequestInterceptor *interceptor = nullptr;
 
-    LunaBrowserProfile(std::filesystem::path profile_base, char* name, LunaAdBlocker& adblocker, bool disable_adblocker = false) : name(name) {
+    LunaBrowserProfile(std::filesystem::path profile_base, char* name, LunaAdBlocker& adblocker, bool disable_adblocker = false) : name(name), profile_path(profile_base) {
         LunaBrowserHistory history(profile_base / "history");
         this->history = history;
         LunaBrowserBookmarks bookmarks(profile_base / "bookmarks");
@@ -1915,6 +1927,9 @@ struct LunaBrowser: QMainWindow {
         QObject::connect(this->tabs, &QTabWidget::currentChanged, [&](int idx) {
             auto *tab_body = dynamic_cast<TabBody*>(this->tabs->currentWidget());
             if (tab_body) {
+                if (tab_body->has_pending_load()) {
+                    this->activate_pending_tab(tab_body);
+                }
                 auto *v = tab_body->active_veiw();
                 if (v) {
                     this->status_bar->set_url(v->url().toString());
@@ -1955,7 +1970,7 @@ struct LunaBrowser: QMainWindow {
         QMainWindow::show();
     }
 
-    TabBody* new_tab(QWebEngineProfile* profile, const char* tab_url = DEFAULT_PAGE_URL, const bool instantly_switch = true) {
+    TabBody* new_tab(QWebEngineProfile* profile, const char* tab_url = DEFAULT_PAGE_URL, const bool instantly_switch = true, const bool defer_load = false) {
         LUNA_DEBUG("Creating a new tab for `{}`", tab_url);
         // auto *page = new QWebEnginePage()
         auto *web_engine_view = new QWebEngineView(profile);
@@ -1967,13 +1982,13 @@ struct LunaBrowser: QMainWindow {
         if (this->opts.force_darkmode) {
             web_engine_view->settings()->setAttribute(QWebEngineSettings::ForceDarkMode, true);
         }
-        if (std::strcmp(tab_url, LUNA_NEW_TAB_URL) == 0) {
+        if (!defer_load && std::strcmp(tab_url, LUNA_NEW_TAB_URL) == 0) {
             // TODO(anas): provide the recents list
         }
         auto tab_body = new TabBody(web_engine_view);
         const auto url = QUrl(tab_url);
         const size_t idx = this->tabs->addTab(tab_body, "New Tab");
-        tab_body->load_timer.start();
+        if (!defer_load) tab_body->load_timer.start();
         if (instantly_switch) {
             this->tabs->setCurrentIndex(idx);
         }
@@ -2114,7 +2129,9 @@ struct LunaBrowser: QMainWindow {
         }
 
         // load the url
-        web_engine_view->load(url);
+        if (!defer_load) {
+            web_engine_view->load(url);
+        }
         return tab_body;
     }
 
@@ -2450,7 +2467,8 @@ struct LunaBrowser: QMainWindow {
             filename += ext;
         }
 
-        const auto sessions_dir = std::filesystem::path(get_app_data_base());
+        const auto profile_path = std::filesystem::path(get_app_data_base()) / this->profile.name;
+        const auto sessions_dir = profile_path / "sessions";
         if (!std::filesystem::exists(sessions_dir)) {
             std::filesystem::create_directories(sessions_dir);
         }
@@ -2462,23 +2480,46 @@ struct LunaBrowser: QMainWindow {
             return "";
         }
 
+        file << SESSION_FILE_HEADER << "\n";
+        file << SESSION_FILE_VERSION_STR << "\n";
+        file << this->tabs->currentIndex() << "\n"; // TEST(anas): idx + 1 ?
+
         const int tab_count = this->tabs->count();
         for (int i = 0; i < tab_count; ++i) {
             auto *tab_body = dynamic_cast<TabBody*>(this->tabs->widget(i));
             if (!tab_body) continue;
-            auto *v = tab_body->active_veiw();
-            if (!v) continue;
 
-            const QString url = v->url().toString();
-            if (url.isEmpty() || url == LUNA_NEW_TAB_URL) continue;
-
-            const QPointF scroll_pos = v->page()->scrollPosition();
-            const QString search = tab_body->search_term;
-
-            file << url.toStdString() << ","
-                 << scroll_pos.x() << ","
-                 << scroll_pos.y() << ","
-                 << search.toStdString() << "\n";
+            if (tab_body->tag == SingleViewTagBodyState) {
+                auto *v = tab_body->active_veiw();
+                if (!v) continue;
+                QString url = v->url().toString();
+                if (url.isEmpty() || url == LUNA_NEW_TAB_URL) continue;
+                QPointF scroll_pos = v->page()->scrollPosition();
+                QString search = tab_body->search_term;
+                QString title = v->title();
+                file << url.toStdString() << ","
+                     << scroll_pos.x() << ","
+                     << scroll_pos.y() << ","
+                     << search.toStdString() << ","
+                     << title.toStdString() << ",s\n";
+            } else if (tab_body->tag == SplitedTagBodyState && tab_body->val.splitter) {
+                QString split_state = tab_body->val.splitter->orientation() == Qt::Horizontal ? "h" : "v";
+                for (int j = 0; j < tab_body->val.splitter->count(); ++j) {
+                    auto *sv = qobject_cast<QWebEngineView*>(tab_body->val.splitter->widget(j));
+                    if (!sv) continue;
+                    QString url = sv->url().toString();
+                    if (url.isEmpty() || url == LUNA_NEW_TAB_URL) continue;
+                    QPointF scroll_pos = sv->page()->scrollPosition();
+                    QString search = (j == 0) ? tab_body->search_term : QString();
+                    QString title = sv->title();
+                    file << url.toStdString() << ","
+                         << scroll_pos.x() << ","
+                         << scroll_pos.y() << ","
+                         << search.toStdString() << ","
+                         << title.toStdString() << ","
+                         << split_state.toStdString() << "\n";
+                }
+            }
         }
 
         file.close();
@@ -2493,9 +2534,10 @@ struct LunaBrowser: QMainWindow {
         return file_path.string();
     }
 
-    void load_session_from_file(const std::string &name) {
+    bool load_session_from_file(const std::string &name) {
         std::string session_name = name;
-        const auto sessions_dir = std::filesystem::path(get_app_data_base());
+        const auto profile_path = this->profile.profile_path;
+        const auto sessions_dir = profile_path / "sessions";
         if (session_name.empty()) {
             const auto last_path = sessions_dir / "last_session";
             if (std::filesystem::exists(last_path)) {
@@ -2503,7 +2545,7 @@ struct LunaBrowser: QMainWindow {
                 std::getline(f, session_name);
             }
             if (session_name.empty()) {
-                return;
+                return true; // in this case the user hasent created any sessions for that profile yet
             }
         }
 
@@ -2515,20 +2557,41 @@ struct LunaBrowser: QMainWindow {
 
         const auto file_path = sessions_dir / filename;
         if (!std::filesystem::exists(file_path)) {
-            return;
+            this->last_error = "The session file dosen't exist";
+            return false;
         }
 
-        struct SessionEntry {
+        struct SessionViewEntry {
             QString url;
             QPointF scroll_pos;
             QString search_term;
+            QString title;
+            QString split_state;
         };
-        std::vector<SessionEntry> entries;
+        std::vector<SessionViewEntry> entries;
+        entries.reserve(10); // no one could have more than a 10 tabs opend at the same time, right?, right?
+        size_t selected_tab_idx = 0;
 
         std::ifstream file(file_path);
         std::string line;
+        bool is_valid = false;
+        if (std::getline(file, line)) { // cheack the header
+            is_valid = line == SESSION_FILE_HEADER;
+        }
+        if (std::getline(file, line)) { // the second line should be a valid scheme version
+            is_valid = line == SESSION_FILE_VERSION_STR;
+        }
+        if (!is_valid) {
+            this->last_error = "Invalid session file headers";
+            return false;
+        }
+        if (std::getline(file, line)) { // the third line should keep the selected tab index
+            selected_tab_idx = str2u64(line); // this function will never fail just like our love :D
+        }
+        int line_idx = 0;
         while (std::getline(file, line)) {
-            if (line.empty()) continue;
+            if (line.empty()) { line_idx++; continue; } // skip empty lines
+            line_idx++;
 
             std::vector<std::string> parts;
             size_t pos = 0;
@@ -2541,16 +2604,22 @@ struct LunaBrowser: QMainWindow {
 
             if (parts.empty() || parts[0].empty()) continue;
 
-            SessionEntry entry;
+            SessionViewEntry entry;
             entry.url = QString::fromStdString(parts[0]);
             if (parts.size() >= 2) entry.scroll_pos.setX(std::stod(parts[1]));
             if (parts.size() >= 3) entry.scroll_pos.setY(std::stod(parts[2]));
             if (parts.size() >= 4) entry.search_term = QString::fromStdString(parts[3]);
+            if (parts.size() >= 6) {
+                entry.title = QString::fromStdString(parts[4]);
+                entry.split_state = QString::fromStdString(parts[5]);
+            } else if (parts.size() >= 5) {
+                entry.split_state = QString::fromStdString(parts[4]);
+            }
             entries.push_back(std::move(entry));
         }
         file.close();
 
-        if (entries.empty()) return;
+        if (entries.empty()) return true;
 
         for (int i = this->tabs->count() - 1; i >= 0; --i) {
             QWidget *w = this->tabs->widget(i);
@@ -2560,28 +2629,170 @@ struct LunaBrowser: QMainWindow {
         }
         this->tabs_count = 0;
 
-        for (const auto &entry : entries) {
-            auto *tab_body = this->new_tab(this->profile.web_engine_profile, entry.url.toStdString().c_str(), false);
-            if (auto *v = tab_body->active_veiw()) {
-                QPointF scroll_pos = entry.scroll_pos;
-                QString search_term = entry.search_term;
-                QObject::connect(v, &QWebEngineView::loadFinished, this, [v, scroll_pos, search_term, tab_body]() {
-                    if (scroll_pos.x() != 0 || scroll_pos.y() != 0) {
-                        v->page()->runJavaScript(QString("window.scrollTo(%1, %2);")
-                            .arg(scroll_pos.x())
-                            .arg(scroll_pos.y()));
+        size_t view_idx = 0;
+        size_t tab_idx = 0;
+        while (view_idx < entries.size()) {
+            bool is_active = (tab_idx == selected_tab_idx);
+            auto &entry = entries[view_idx];
+            QString split_state = entry.split_state.isEmpty() ? QString("s") : entry.split_state;
+
+            if (split_state == "s") {
+                auto *tab_body = this->new_tab(this->profile.web_engine_profile,
+                    entry.url.toStdString().c_str(), false, !is_active);
+                int tab_index = this->tabs->indexOf(tab_body);
+                if (tab_index >= 0 && !entry.title.isEmpty()) {
+                    this->tabs->setTabText(tab_index, entry.title);
+                }
+                if (auto *v = tab_body->active_veiw()) {
+                    if (is_active) {
+                        QPointF scroll_pos = entry.scroll_pos;
+                        QString search_term = entry.search_term;
+                        QObject::connect(v, &QWebEngineView::loadFinished, this, [v, scroll_pos, search_term, tab_body]() {
+                            if (scroll_pos.x() != 0 || scroll_pos.y() != 0) {
+                                v->page()->runJavaScript(QString("window.scrollTo(%1, %2);")
+                                    .arg(scroll_pos.x())
+                                    .arg(scroll_pos.y()));
+                            }
+                            if (!search_term.isEmpty()) {
+                                tab_body->search_term = search_term;
+                                v->page()->findText(search_term, QWebEnginePage::FindFlags(), [](const QWebEngineFindTextResult &) {});
+                            }
+                        });
+                    } else {
+                        tab_body->pending_views.push_back({entry.url, entry.scroll_pos, entry.search_term, entry.title});
                     }
-                    if (!search_term.isEmpty()) {
-                        tab_body->search_term = search_term;
-                        v->page()->findText(search_term, QWebEnginePage::FindFlags(), [](const QWebEngineFindTextResult &) {});
+                }
+                view_idx++;
+            } else if (split_state == "h" || split_state == "v") {
+                Qt::Orientation orientation = (split_state == "h") ? Qt::Horizontal : Qt::Vertical;
+
+                auto *v1 = new QWebEngineView(this->profile.web_engine_profile);
+                if (this->opts.no_js) v1->settings()->setAttribute(QWebEngineSettings::JavascriptEnabled, false);
+                if (this->opts.force_darkmode) v1->settings()->setAttribute(QWebEngineSettings::ForceDarkMode, true);
+
+                auto *tab_body = new TabBody(v1);
+                tab_body->tag = SplitedTagBodyState;
+
+                auto *splitter = new QSplitter(orientation, tab_body);
+                tab_body->layout()->removeWidget(v1);
+                v1->setParent(splitter);
+                splitter->addWidget(v1);
+
+                QWebEngineView *v2 = nullptr;
+                if (view_idx + 1 < entries.size()) {
+                    v2 = new QWebEngineView(this->profile.web_engine_profile);
+                    if (this->opts.no_js) v2->settings()->setAttribute(QWebEngineSettings::JavascriptEnabled, false);
+                    if (this->opts.force_darkmode) v2->settings()->setAttribute(QWebEngineSettings::ForceDarkMode, true);
+                    v2->setParent(splitter);
+                    splitter->addWidget(v2);
+                }
+
+                tab_body->val.splitter = splitter;
+                tab_body->layout()->addWidget(splitter);
+
+                int split_tab_idx = this->tabs->addTab(tab_body, "New Tab");
+                if (split_tab_idx >= 0 && !entry.title.isEmpty()) {
+                    this->tabs->setTabText(split_tab_idx, entry.title);
+                }
+                this->tabs_count++;
+
+                auto connect_view = [this, tab_body](QWebEngineView *sv) {
+                    QObject::connect(sv, &QWebEngineView::titleChanged, [tab_body, this](const QString &) {
+                        this->update_tab_title(tab_body);
+                    });
+                    QObject::connect(sv, &QWebEngineView::urlChanged, this, [this](const QUrl u) {
+                        if (u.scheme() != LUNA_PREFEX) this->profile.history.append(u);
+                    });
+                    QObject::connect(sv, &QWebEngineView::loadStarted, this, [sv, this]() {
+                        auto *parent = sv->parentWidget();
+                        while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
+                        if (parent) static_cast<TabBody*>(parent)->load_timer.start();
+                    });
+                    QObject::connect(sv, &QWebEngineView::loadFinished, this, [sv, this]() {
+                        auto *parent = sv->parentWidget();
+                        while (parent && !dynamic_cast<TabBody*>(parent)) parent = parent->parentWidget();
+                        if (parent) static_cast<TabBody*>(parent)->load_timer.stop();
+                    });
+                };
+
+                if (v1) connect_view(v1);
+                if (v2) connect_view(v2);
+
+                if (is_active) {
+                    auto load_view = [this](QWebEngineView *sv, const SessionViewEntry &e) {
+                        sv->load(QUrl(e.url));
+                        QPointF sp = e.scroll_pos;
+                        QObject::connect(sv, &QWebEngineView::loadFinished, this, [sv, sp]() {
+                            if (sp.x() != 0 || sp.y() != 0) {
+                                sv->page()->runJavaScript(QString("window.scrollTo(%1, %2);").arg(sp.x()).arg(sp.y()));
+                            }
+                        });
+                    };
+                    load_view(v1, entry);
+                    if (v2 && view_idx + 1 < entries.size()) {
+                        load_view(v2, entries[view_idx + 1]);
                     }
-                });
+                } else {
+                    tab_body->pending_views.push_back({entry.url, entry.scroll_pos, entry.search_term, entry.title});
+                    if (v2 && view_idx + 1 < entries.size()) {
+                        auto &e2 = entries[view_idx + 1];
+                        tab_body->pending_views.push_back({e2.url, e2.scroll_pos, e2.search_term, e2.title});
+                    }
+                }
+
+                view_idx += (v2 ? 2 : 1);
+            } else {
+                view_idx++;
+                continue;
+            }
+            tab_idx++;
+        }
+
+        if (this->tabs->count() > 0 && selected_tab_idx < (size_t)this->tabs->count()) {
+            this->tabs->setCurrentIndex(selected_tab_idx);
+        }
+        return true; // loaded successfully
+    }
+
+    void activate_pending_tab(TabBody *tab_body) {
+        if (!tab_body || !tab_body->has_pending_load()) return;
+
+        auto load_view = [this](QWebEngineView *sv, const TabBody::PendingViewState &pv) {
+            sv->load(QUrl(pv.url));
+            const QPointF sp = pv.scroll_position;
+            const QString st = pv.search_term;
+            QObject::connect(sv, &QWebEngineView::loadFinished, this, [sv, sp, st]() {
+                if (sp.x() != 0 || sp.y() != 0) {
+                    sv->page()->runJavaScript(QString("window.scrollTo(%1, %2);").arg(sp.x()).arg(sp.y()));
+                }
+                if (!st.isEmpty()) {
+                    sv->page()->findText(st, QWebEnginePage::FindFlags(), [](const QWebEngineFindTextResult &) {});
+                }
+            });
+        };
+
+        if (tab_body->tag == TabBodyStateTag::SingleViewTagBodyState) {
+            auto *v = tab_body->active_veiw();
+            if (v && !tab_body->pending_views.empty()) {
+                load_view(v, tab_body->pending_views[0]);
+                if (!tab_body->pending_views[0].search_term.isEmpty()) {
+                    tab_body->search_term = tab_body->pending_views[0].search_term;
+                }
+            }
+        } else if (tab_body->tag == TabBodyStateTag::SplitedTagBodyState && tab_body->val.splitter) {
+            size_t pv_idx = 0;
+            for (int i = 0; i < tab_body->val.splitter->count() && pv_idx < tab_body->pending_views.size(); ++i) {
+                auto *sv = qobject_cast<QWebEngineView*>(tab_body->val.splitter->widget(i));
+                if (!sv) continue;
+                load_view(sv, tab_body->pending_views[pv_idx]);
+                if (pv_idx == 0 && !tab_body->pending_views[pv_idx].search_term.isEmpty()) {
+                    tab_body->search_term = tab_body->pending_views[pv_idx].search_term;
+                }
+                pv_idx++;
             }
         }
 
-        if (this->tabs->count() > 0) {
-            this->tabs->setCurrentIndex(0);
-        }
+        tab_body->pending_views.clear();
     }
 
     bool run_cmd(const BrowserCommands command, const QString &args) {
@@ -2672,15 +2883,15 @@ struct LunaBrowser: QMainWindow {
             browser_command = BrowserCommands::OpenCommand;
         } else if (cmd_name == "tabopen" || cmd_name == "tabnew") {
             browser_command = BrowserCommands::NewTabComamand;
-        } else if (cmd_name == "reload") {
+        } else if (cmd_name == "r" || cmd_name == "reload") {
             browser_command = BrowserCommands::ReloadCommand;
         } else if (cmd_name == "stop") {
             browser_command = BrowserCommands::StopCommand;
         } else if (cmd_name == "close" || cmd_name == "tabclose") {
             browser_command = BrowserCommands::CloseTabCommand;
-        } else if (cmd_name == "wq" || cmd_name == "x") {
+        } else if (cmd_name == "w" || cmd_name == "wq") {
             browser_command = BrowserCommands::SaveAndQuiteCommmand;
-        } else if (cmd_name == "w'|| cmd_name == "session-save") {
+        } else if (cmd_name == "x" || cmd_name == "session-save") {
             browser_command = BrowserCommands::SaveSessionCommand;
         }
 
@@ -2837,7 +3048,9 @@ int main(int argc, char *argv[]) {
     browser.prepare();
     browser.show();
 
-    browser.load_session_from_file(opts.session_name);
+    if(!browser.load_session_from_file(opts.session_name)) {
+        browser.show_error_notification();
+    }
 
     const int ret = app.exec();
 
