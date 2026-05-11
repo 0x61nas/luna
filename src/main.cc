@@ -21,6 +21,9 @@
 #include <QWebEngineUrlScheme>
 #include <QWebEngineUrlRequestJob>
 #include <QWebEngineSettings>
+#include <QSurfaceFormat>
+#include <QSGRendererInterface>
+#include <QQuickWindow>
 #include <QWebEngineUrlRequestInterceptor>
 #include <QWebEngineUrlRequestInfo>
 #include <QWebEngineFindTextResult>
@@ -1716,6 +1719,7 @@ struct LunaBrowserOptions {
     std::string session_name;
     std::vector<std::string> urls;
     std::vector<std::string> commands;
+    bool disable_webgpu = false;
 };
 
 struct LunaBrowser: QMainWindow {
@@ -1974,13 +1978,18 @@ struct LunaBrowser: QMainWindow {
         LUNA_DEBUG("Creating a new tab for `{}`", tab_url);
         // auto *page = new QWebEnginePage()
         auto *web_engine_view = new QWebEngineView(profile);
+        auto *settings = web_engine_view->settings();
         if (this->opts.no_js) {
             // TEST(anas): dose this blocks our scripts too?
             // if its maybe we want to go with the CSP + the `FuckAllJavaScriptFilter`
-            web_engine_view->settings()->setAttribute(QWebEngineSettings::JavascriptEnabled, false);
+            settings->setAttribute(QWebEngineSettings::JavascriptEnabled, false);
         }
         if (this->opts.force_darkmode) {
-            web_engine_view->settings()->setAttribute(QWebEngineSettings::ForceDarkMode, true);
+            settings->setAttribute(QWebEngineSettings::ForceDarkMode, true);
+        }
+        if (!this->opts.disable_webgpu) {
+            settings->setAttribute(QWebEngineSettings::WebGLEnabled, true);
+            settings->setAttribute(QWebEngineSettings::Accelerated2dCanvasEnabled, true);
         }
         if (!defer_load && std::strcmp(tab_url, LUNA_NEW_TAB_URL) == 0) {
             // TODO(anas): provide the recents list
@@ -2935,7 +2944,8 @@ void print_help(const char *bin) {
         "  --private-window           Open a private window\n"
         "  -p, --profile <profile>    Load a specific profile\n"
         "  -s, --session <name>       Restore a specific saved session\n"
-        "  --freamless                Open window with no tab/status bar\n\n"
+        "  --freamless                Open window with no tab/status bar\n"
+        "  --disable-webgpu           Disable WebGPU (and WebGL/Accelerated Canvas)\n\n"
 
         "Arguments:\n"
         "  <urls>                     One or more URLs to open\n"
@@ -2952,7 +2962,22 @@ void print_help(const char *bin) {
 #ifndef LUNA_TESTING
 int main(int argc, char *argv[]) {
     register_luna_scheme();   // MUST be first
+
+    QCoreApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+
     QApplication app(argc, argv);  // MUST be first Qt thing
+
+    // better surface format
+    QSurfaceFormat format;
+    format.setRenderableType(QSurfaceFormat::OpenGL);
+    format.setVersion(4, 6);
+    format.setProfile(QSurfaceFormat::CoreProfile);
+    format.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
+    format.setDepthBufferSize(24);
+    format.setStencilBufferSize(8);
+    QSurfaceFormat::setDefaultFormat(format);
+
     // LunaProfile profile;
     LunaBrowserOptions opts;
     opts.commands.reserve(argc - 1); // you have to be ready for the worst
@@ -2975,6 +3000,7 @@ int main(int argc, char *argv[]) {
         else if (s == "--no-js") opts.no_js = true;
         else if (s == "--force-darkmode") opts.force_darkmode = true;
         else if (s == "--freamless") opts.frameless = true;
+        else if (s == "--disable-webgpu") opts.disable_webgpu = true;
 
         else if (s == "-p" || s == "--profile") {
             if (i + 1 >= argc) {
@@ -3053,6 +3079,23 @@ int main(int argc, char *argv[]) {
             LUNA_LOG("  [Content] pattern='{}' selector='{}'", rule.pattern, rule.selector);
         }
 #endif
+    }
+
+    if (!opts.disable_webgpu) {
+        // chromium flags
+        qputenv("QTWEBENGINE_CHROMIUM_FLAGS",
+            "--enable-gpu "
+            "--enable-gpu-rasterization "
+            "--enable-zero-copy "
+            "--enable-webgl "
+            "--enable-webgl2-compute-context "
+            "--enable-unsafe-webgpu "
+            "--enable-webgpu-developer-features "
+            "--ignore-gpu-blocklist "
+            "--enable-features=Vulkan,UseSkiaRenderer,WebGPU,WebGPUCompatibilityMode,WebGPUExperimentalFeatures "
+            "--enable-vulkan "
+            "--disable-software-rasterizer "
+        );
     }
 
     LunaBrowserProfile profile(path, profile_name, adblocker, opts.disable_adblocker);

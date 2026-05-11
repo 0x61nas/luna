@@ -34,6 +34,9 @@ sanitize SANITIZER='address,undefined':
     clang++ {{CXXFLAGS}} -O0 -g -fsanitize={{SANITIZER}} src/main.cc -o {{BUILD_DIR}}/luna-browser-santize $(pkg-config {{PFLAGS}} {{PLIBS}})
     LSAN_OPTIONS=suppressions=lsan_suppr.txt {{BUILD_DIR}}/luna-browser-santize
 
+check:
+    {{CXX}} -xc++ src/main.cc -fsyntax-only -std=c++23 $(pkg-config {{PFLAGS}} {{PLIBS}})
+
 collect-ad-links EXTRA_CXXFLAGS='-ggdb -O0':
     [[ -d {{BUILD_DIR}} ]] || mkdir -p {{BUILD_DIR}}
     {{CXX}} {{CXXFLAGS}} {{EXTRA_CXXFLAGS}} scripts/collect_ad_links.cc -o {{BUILD_DIR}}/collect-ad-links $(pkg-config {{PFLAGS}} {{PLIBS}})
