@@ -7,74 +7,64 @@
 #include <cstring>
 #include <unistd.h>
 #include <thread>
+#include <chrono>
 
-int test_easylist_samples();
-int test_str2u64();
-int test_cache();
-int test_get_hiding_rules_for_domain();
-int test_load_all_filter_lists();
-int test_block_request_combinations();
-int test_youtube_ads();
-#if __has_include("real_network_ads.h")
-#include "real_network_ads.h"
-int test_real_network_ads();
-#endif
+#define ANSI_RED     "\033[31m"
+#define ANSI_GREEN   "\033[32m"
+#define ANSI_YELLOW  "\033[33m"
+#define ANSI_CYAN    "\033[36m"
+#define ANSI_MAGENTA "\033[35m"
+#define ANSI_BOLD    "\033[1m"
+#define ANSI_RESET   "\033[0m"
+
+struct {
+    size_t total = 0;
+    size_t failed = 0;
+} luna_test_stats;
 
 #define LUNA_TEST_ASSERT(cond) \
     do { \
+        luna_test_stats.total++; \
         const bool __cond_eval_result = (cond); \
         if (!__cond_eval_result) { \
-            fprintf(stderr, "[FAIL] %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+            fprintf(stderr, ANSI_RED "[  FAIL  ]" ANSI_RESET " %s:%d: %s\n", __FILE__, __LINE__, #cond); \
             luna_failed_tests += 1; \
+            luna_test_stats.failed++; \
         } else { \
-            printf("[PASS] %s\n", #cond); \
+            printf(ANSI_GREEN "[  PASS  ]" ANSI_RESET " %s\n", #cond); \
         } \
     } while (0)
 
-int run_tests() {
-    int failed_tests = 0;
-    // Test 1: str2u64 basic conversions
-    failed_tests += test_str2u64();
+struct TestCase {
+    const char* name;
+    size_t (*func)();
+    const char* desc;
+    bool skip_all;
+};
 
-    // Test 2: Timestamp parsing (validates getline fix and parsing logic)
-    printf("\nTesting timestamp parsing...\n");
-    const char* test_db = "/tmp/luna_test_ts_db.txt";
-    {
-        std::ofstream db(test_db);
-        db << "list1:1700000000\n";
-        db << "list2:1700000001\n";
-        db << "invalid_line\n";  // No colon, should be skipped
-        db << "list3:\n";        // No value, should be skipped
-    }
-
-    printf("\nTesting real easylist samples...\n");
-    failed_tests += test_easylist_samples();
-
-    printf("\nTesting cache functionality...\n");
-    failed_tests += test_cache();
-
-    printf("\nTesting get hiding rules for domain...\n");
-    failed_tests += test_get_hiding_rules_for_domain();
-
-    printf("\nTesting all filter lists combined...\n");
-    failed_tests += test_load_all_filter_lists();
-
-    printf("\nTesting block_request argument combinations...\n");
-    failed_tests += test_block_request_combinations();
-
-    // printf("\nTesting YouTube ad blocking...\n");
-    // failed_tests += test_youtube_ads();
-
+size_t test_easylist_samples();
+size_t test_str2u64();
+size_t test_cache();
+size_t test_get_hiding_rules_for_domain();
+size_t test_load_all_filter_lists();
+size_t test_block_request_combinations();
+size_t test_youtube_ads();
 #if __has_include("real_network_ads.h")
-    printf("\nTesting real network ads...\n");
-    failed_tests += test_real_network_ads();
+#include "real_network_ads.h"
+size_t test_real_network_ads();
 #endif
 
-    return failed_tests;
+size_t test_str2u64() {
+    size_t luna_failed_tests = 0;
+    LUNA_TEST_ASSERT(str2u64("0") == 0);
+    LUNA_TEST_ASSERT(str2u64("12345") == 12345);
+    LUNA_TEST_ASSERT(str2u64("18446744073709551615") == UINT64_MAX);
+    LUNA_TEST_ASSERT(str2u64("love") == THE_ZERO);
+    return luna_failed_tests;
 }
 
-int test_easylist_samples() {
-    int luna_failed_tests = 0;
+size_t test_easylist_samples() {
+    size_t luna_failed_tests = 0;
     LunaAdBlocker ab(std::filesystem::path("not_used"));
     ab.parse_list_file("tests/easylist.txt");
 
@@ -84,11 +74,221 @@ int test_easylist_samples() {
     return luna_failed_tests;
 }
 
-int test_load_all_filter_lists() {
-    int luna_failed_tests = 0;
+size_t test_cache() {
+    size_t luna_failed_tests = 0;
+    LunaAdBlocker ab(std::filesystem::path("not_used"));
+    ab.parse_list_file("tests/easylist.txt");
+    ab.clear_cache();
 
-    // Test 1: Per-file filter counts
-    printf("\n--- Per-file filter counts ---\n");
+    printf("\n  " ANSI_YELLOW "▸ Test 1:" ANSI_RESET " Cache miss on first request\n");
+    LUNA_TEST_ASSERT(ab.cache_size() == 0);
+    bool result1 = ab.block_request("https://googleads.g.doubleclick.net/pagead/id");
+    LUNA_TEST_ASSERT(result1 == true);
+    LUNA_TEST_ASSERT(ab.cache_size() == 1);
+
+    printf("\n  " ANSI_YELLOW "▸ Test 2:" ANSI_RESET " Cache hit on second request\n");
+    bool result2 = ab.block_request("https://googleads.g.doubleclick.net/pagead/id");
+    LUNA_TEST_ASSERT(result2 == true);
+    LUNA_TEST_ASSERT(ab.cache_size() == 1);
+
+    printf("\n  " ANSI_YELLOW "▸ Test 3:" ANSI_RESET " Different URL should miss cache\n");
+    bool result3 = ab.block_request("https://thatsillyman.win");
+    LUNA_TEST_ASSERT(result3 == false);
+    LUNA_TEST_ASSERT(ab.cache_size() == 2);
+
+    printf("\n  " ANSI_YELLOW "▸ Test 4:" ANSI_RESET " Cache with resource type and document domain\n");
+    bool result4 = ab.block_request("https://googleads.g.doubleclick.net/pagead/id", 1 << 0, "example.com");
+    LUNA_TEST_ASSERT(result4 == true);
+    LUNA_TEST_ASSERT(ab.cache_size() == 3);
+
+    printf("\n  " ANSI_YELLOW "▸ Test 5:" ANSI_RESET " Flush clears cache and stops thread\n");
+    ab.flush();
+    LUNA_TEST_ASSERT(ab.cache_size() == 0);
+
+    return luna_failed_tests;
+}
+
+size_t test_get_hiding_rules_for_domain() {
+    size_t luna_failed_tests = 0;
+
+    printf("\n  " ANSI_YELLOW "▸ Test 1:" ANSI_RESET " No content rules returns empty array\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used1"));
+        std::string r = ab.get_hiding_rules_for_domain("example.com");
+        LUNA_TEST_ASSERT(r == "[]");
+    }
+
+    printf("\n  " ANSI_YELLOW "▸ Test 2:" ANSI_RESET " Global rules apply to any domain\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used2"));
+        LunaAdBlockerRule rule;
+        rule.type = LunaAdBlockerRuleType::ContentHideRule;
+        rule.selector = ".ad";
+        ab.content_rules.push_back(std::move(rule));
+        std::string r1 = ab.get_hiding_rules_for_domain("example.com");
+        LUNA_TEST_ASSERT(r1.find(".ad") != std::string::npos);
+        std::string r2 = ab.get_hiding_rules_for_domain("other.com");
+        LUNA_TEST_ASSERT(r2.find(".ad") != std::string::npos);
+    }
+
+    printf("\n  " ANSI_YELLOW "▸ Test 3:" ANSI_RESET " Domain-specific rules only for matching domain\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used3"));
+        LunaAdBlockerRule rule;
+        rule.type = LunaAdBlockerRuleType::ContentHideRule;
+        rule.selector = "#ad-banner";
+        rule.options.domains.push_back("example.com");
+        ab.content_rules.push_back(std::move(rule));
+        std::string r1 = ab.get_hiding_rules_for_domain("example.com");
+        LUNA_TEST_ASSERT(r1.find("#ad-banner") != std::string::npos);
+        std::string r2 = ab.get_hiding_rules_for_domain("other.com");
+        LUNA_TEST_ASSERT(r2 == "[]");
+    }
+
+    printf("\n  " ANSI_YELLOW "▸ Test 4:" ANSI_RESET " Subdomain matches parent domain rule\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used4"));
+        LunaAdBlockerRule rule;
+        rule.type = LunaAdBlockerRuleType::ContentHideRule;
+        rule.selector = ".subdomain-ad";
+        rule.options.domains.push_back("example.com");
+        ab.content_rules.push_back(std::move(rule));
+        std::string r1 = ab.get_hiding_rules_for_domain("sub.example.com");
+        LUNA_TEST_ASSERT(r1.find(".subdomain-ad") != std::string::npos);
+        std::string r2 = ab.get_hiding_rules_for_domain("example.org");
+        LUNA_TEST_ASSERT(r2 == "[]");
+    }
+
+    printf("\n  " ANSI_YELLOW "▸ Test 5:" ANSI_RESET " Exclude domains work correctly\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used5"));
+        LunaAdBlockerRule rule;
+        rule.type = LunaAdBlockerRuleType::ContentHideRule;
+        rule.selector = "#excluded-ad";
+        rule.options.domains.push_back("example.com");
+        rule.options.exclude_domains.push_back("mail.example.com");
+        ab.content_rules.push_back(std::move(rule));
+        std::string r1 = ab.get_hiding_rules_for_domain("example.com");
+        LUNA_TEST_ASSERT(r1.find("#excluded-ad") != std::string::npos);
+        std::string r2 = ab.get_hiding_rules_for_domain("mail.example.com");
+        LUNA_TEST_ASSERT(r2 == "[]");
+    }
+
+    printf("\n  " ANSI_YELLOW "▸ Test 6:" ANSI_RESET " Empty selector is skipped\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used6"));
+        LunaAdBlockerRule rule1;
+        rule1.type = LunaAdBlockerRuleType::ContentHideRule;
+        rule1.selector = "";
+        ab.content_rules.push_back(std::move(rule1));
+        LunaAdBlockerRule rule2;
+        rule2.type = LunaAdBlockerRuleType::ContentHideRule;
+        rule2.selector = ".real-ad";
+        ab.content_rules.push_back(std::move(rule2));
+        std::string r = ab.get_hiding_rules_for_domain("example.com");
+        LUNA_TEST_ASSERT(r.find(".real-ad") != std::string::npos);
+        LUNA_TEST_ASSERT(r.find("\"selector\":\"\"") == std::string::npos);
+    }
+
+    printf("\n  " ANSI_YELLOW "▸ Test 7:" ANSI_RESET " JSON format is valid\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used7"));
+        LunaAdBlockerRule rule1;
+        rule1.type = LunaAdBlockerRuleType::ContentHideRule;
+        rule1.selector = "#ad1";
+        ab.content_rules.push_back(std::move(rule1));
+        LunaAdBlockerRule rule2;
+        rule2.type = LunaAdBlockerRuleType::ContentHideRule;
+        rule2.selector = ".ad2";
+        ab.content_rules.push_back(std::move(rule2));
+        std::string r = ab.get_hiding_rules_for_domain("example.com");
+        LUNA_TEST_ASSERT(r[0] == '[');
+        LUNA_TEST_ASSERT(r.back() == ']');
+        LUNA_TEST_ASSERT(r.find("{\"selector\":\"#ad1\"}") != std::string::npos);
+        LUNA_TEST_ASSERT(r.find("{\"selector\":\".ad2\"}") != std::string::npos);
+    }
+
+    printf("\n  " ANSI_YELLOW "▸ Test 8:" ANSI_RESET " From easylist file - global rules present\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used8"));
+        ab.parse_list_file("tests/easylist.txt");
+        std::string r = ab.get_hiding_rules_for_domain("example.com");
+        LUNA_TEST_ASSERT(!r.empty());
+        LUNA_TEST_ASSERT(r[0] == '[');
+        LUNA_TEST_ASSERT(r.back() == ']');
+    }
+
+    printf("\n  " ANSI_YELLOW "▸ Test 9:" ANSI_RESET " easylist - youtube domain filtering\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used9"));
+        ab.parse_list_file("tests/easylist.txt");
+
+        std::string r_youtube = ab.get_hiding_rules_for_domain("youtube.com");
+        LUNA_TEST_ASSERT(!r_youtube.empty());
+        LUNA_TEST_ASSERT(r_youtube.find("#shopping-timely-shelf") != std::string::npos);
+        LUNA_TEST_ASSERT(r_youtube.find("#sticker-layer") != std::string::npos);
+        LUNA_TEST_ASSERT(r_youtube.find("ytd-rich-item-renderer:has(> #content > ytd-ad-slot-renderer)") != std::string::npos);
+
+        LUNA_TEST_ASSERT(r_youtube.find("shreddit-ad-post") == std::string::npos);
+        LUNA_TEST_ASSERT(r_youtube.find("reddit.com") == std::string::npos);
+        LUNA_TEST_ASSERT(r_youtube.find("moviekhhd") == std::string::npos);
+        LUNA_TEST_ASSERT(r_youtube.find("reddit") == std::string::npos);
+        LUNA_TEST_ASSERT(r_youtube.find("moviekhhd") == std::string::npos);
+    }
+
+    printf("\n  " ANSI_YELLOW "▸ Test 10:" ANSI_RESET " easylist - reddit domain filtering\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used10"));
+        ab.parse_list_file("tests/easylist.txt");
+
+        std::string r_reddit = ab.get_hiding_rules_for_domain("reddit.com");
+        LUNA_TEST_ASSERT(!r_reddit.empty());
+        LUNA_TEST_ASSERT(r_reddit.find("shreddit-ad-post") != std::string::npos);
+        LUNA_TEST_ASSERT(r_reddit.find("#shopping-timely-shelf") == std::string::npos);
+        LUNA_TEST_ASSERT(r_reddit.find("#sticker-layer") == std::string::npos);
+        LUNA_TEST_ASSERT(r_reddit.find("data-before-content") != std::string::npos);
+        LUNA_TEST_ASSERT(r_reddit.find("data-faceplate-tracking-context") != std::string::npos);
+    }
+
+    printf("\n  " ANSI_YELLOW "▸ Test 11:" ANSI_RESET " Multi-domain content rule parsing\n");
+    {
+        LunaAdBlocker ab(std::filesystem::path("not_used11"));
+        auto rule = LunaAdBlockerRule::parse("domain1.com,domain2.com##.multi-ad");
+        LUNA_TEST_ASSERT(rule.type == LunaAdBlockerRuleType::ContentHideRule);
+        LUNA_TEST_ASSERT(rule.selector == ".multi-ad");
+        LUNA_TEST_ASSERT(rule.options.domains.size() == 2);
+        LUNA_TEST_ASSERT(rule.options.domains[0] == "domain1.com");
+        LUNA_TEST_ASSERT(rule.options.domains[1] == "domain2.com");
+
+        ab.content_rules.push_back(std::move(rule));
+
+        std::string r1 = ab.get_hiding_rules_for_domain("domain1.com");
+        LUNA_TEST_ASSERT(r1.find(".multi-ad") != std::string::npos);
+
+        std::string r2 = ab.get_hiding_rules_for_domain("domain2.com");
+        LUNA_TEST_ASSERT(r2.find(".multi-ad") != std::string::npos);
+
+        std::string r3 = ab.get_hiding_rules_for_domain("other.com");
+        LUNA_TEST_ASSERT(r3 == "[]");
+    }
+
+    printf("\n  " ANSI_YELLOW "▸ Test 12:" ANSI_RESET " Real multi-domain content rule from easylist\n");
+    {
+        auto rule = LunaAdBlockerRule::parse("calculatorsoup.com,thetvdb.com###Bottom");
+        LUNA_TEST_ASSERT(rule.type == LunaAdBlockerRuleType::ContentHideRule);
+        LUNA_TEST_ASSERT(rule.selector == "#Bottom");
+        LUNA_TEST_ASSERT(rule.options.domains.size() == 2);
+        LUNA_TEST_ASSERT(rule.options.domains[0] == "calculatorsoup.com");
+        LUNA_TEST_ASSERT(rule.options.domains[1] == "thetvdb.com");
+    }
+
+    return luna_failed_tests;
+}
+
+size_t test_load_all_filter_lists() {
+    size_t luna_failed_tests = 0;
+
+    printf("\n  " ANSI_YELLOW "▸ Per-file filter counts" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used"));
         ab.parse_list_file("tests/easylist.txt");
@@ -132,8 +332,7 @@ int test_load_all_filter_lists() {
         LUNA_TEST_ASSERT(ab.content_rules.size() == 169);
     }
 
-    // Test 2: Combined filter counts across all lists
-    printf("\n--- Combined filter counts ---\n");
+    printf("\n  " ANSI_YELLOW "▸ Combined filter counts" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used"));
         ab.parse_list_file("tests/easylist.txt");
@@ -148,8 +347,7 @@ int test_load_all_filter_lists() {
         LUNA_TEST_ASSERT(ab.content_rules.size() == 28514);
     }
 
-    // Test 3: Normal page URLs should NOT be blocked
-    printf("\n--- Page URLs (should not block) ---\n");
+    printf("\n  " ANSI_YELLOW "▸ Page URLs (should not block)" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used"));
         ab.parse_list_file("tests/easylist.txt");
@@ -166,8 +364,7 @@ int test_load_all_filter_lists() {
         LUNA_TEST_ASSERT(ab.block_request("https://github.com") == false);
     }
 
-    // Test 4: Known ad/tracker URLs SHOULD be blocked
-    printf("\n--- Ad/tracker URLs (should block) ---\n");
+    printf("\n  " ANSI_YELLOW "▸ Ad/tracker URLs (should block)" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used"));
         ab.parse_list_file("tests/easylist.txt");
@@ -187,8 +384,7 @@ int test_load_all_filter_lists() {
         LUNA_TEST_ASSERT(ab.block_request("https://googleads.g.doubleclick.net/pagead/id") == true);
     }
 
-    // Test 5: Content hiding rules from combined lists
-    printf("\n--- Content hiding rules ---\n");
+    printf("\n  " ANSI_YELLOW "▸ Content hiding rules" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used"));
         ab.parse_list_file("tests/easylist.txt");
@@ -221,15 +417,14 @@ int test_load_all_filter_lists() {
     return luna_failed_tests;
 }
 
-int test_block_request_combinations() {
-    int luna_failed_tests = 0;
+size_t test_block_request_combinations() {
+    size_t luna_failed_tests = 0;
     const char* lists[] = {
         "tests/easylist.txt", "tests/easyprivacy.txt", "tests/uboFilters.txt",
         "tests/yt-shorts.txt", "tests/unbreak.txt", "tests/quick-fixes.txt"
     };
 
-    // Test 1: luna: internal URLs are hardcoded to never block
-    printf("\n--- luna: internal URLs (hardcoded exemption) ---\n");
+    printf("\n  " ANSI_YELLOW "▸ luna: internal URLs (hardcoded exemption)" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used1"));
         for (auto f : lists) ab.parse_list_file(f);
@@ -241,13 +436,11 @@ int test_block_request_combinations() {
         LUNA_TEST_ASSERT(ab.block_request("luna:newtab", 1 << 1, "youtube.com") == false);
     }
 
-    // Test 2: resource_type filtering — same URL with different resource types
-    printf("\n--- resource_type filtering ($image rule) ---\n");
+    printf("\n  " ANSI_YELLOW "▸ resource_type filtering ($image rule)" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used2"));
         for (auto f : lists) ab.parse_list_file(f);
 
-        // /ad/image/*$image should only match when resource_type includes image
         LUNA_TEST_ASSERT(ab.block_request("https://example.com/ad/image/banner.png") == false);
         LUNA_TEST_ASSERT(ab.block_request("https://example.com/ad/image/banner.png", 1 << 0) == false);
         LUNA_TEST_ASSERT(ab.block_request("https://example.com/ad/image/banner.png", 1 << 1) == true);
@@ -255,43 +448,31 @@ int test_block_request_combinations() {
         LUNA_TEST_ASSERT(ab.block_request("https://example.com/ad/image/banner.png", 1 << 5) == false);
     }
 
-    // Test 3: document_domain filtering — same URL, different document domains
-    printf("\n--- document_domain (third-party) filtering ---\n");
+    printf("\n  " ANSI_YELLOW "▸ document_domain (third-party) filtering" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used3"));
         for (auto f : lists) ab.parse_list_file(f);
 
-        // thatsillyman.win is not an ad domain — not blocked as page load
         LUNA_TEST_ASSERT(ab.block_request("https://thatsillyman.win") == false);
         LUNA_TEST_ASSERT(ab.block_request("https://thatsillyman.win", 0, "thatsillyman.win") == false);
     }
 
-    // Test 4: Combined resource_type + document_domain
-    printf("\n--- Combined resource_type + document_domain ---\n");
+    printf("\n  " ANSI_YELLOW "▸ Combined resource_type + document_domain" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used4"));
         for (auto f : lists) ab.parse_list_file(f);
 
-        // ||bit.ly^$script,domain=dailyuploads.net|freeshot.live
-        // nothing set → not blocked
         LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123") == false);
-        // script + matching domain → blocked
         LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 1 << 0, "dailyuploads.net") == true);
         LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 1 << 0, "freeshot.live") == true);
-        // script but no domain → not blocked (domain missing)
         LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 1 << 0) == false);
-        // script + non-matching domain → not blocked (wrong domain)
         LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 1 << 0, "google.com") == false);
-        // stylesheet + matching domain → not blocked (wrong resource type)
         LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 1 << 2, "dailyuploads.net") == false);
-        // image + matching domain → not blocked (wrong resource type)
         LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 1 << 1, "dailyuploads.net") == false);
-        // no resource type + matching domain → not blocked (no type specified)
         LUNA_TEST_ASSERT(ab.block_request("https://bit.ly/abc123", 0, "dailyuploads.net") == false);
     }
 
-    // Test 5: Page URLs with various argument combos
-    printf("\n--- Page URLs with various argument combos ---\n");
+    printf("\n  " ANSI_YELLOW "▸ Page URLs with various argument combos" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used5"));
         for (auto f : lists) ab.parse_list_file(f);
@@ -314,8 +495,7 @@ int test_block_request_combinations() {
         LUNA_TEST_ASSERT(ab.block_request("https://github.com", 0, "example.com") == false);
     }
 
-    // Test 6: Known ad URLs blocked with all argument combinations
-    printf("\n--- Ad URLs with all argument combos ---\n");
+    printf("\n  " ANSI_YELLOW "▸ Ad URLs with all argument combos" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used6"));
         for (auto f : lists) ab.parse_list_file(f);
@@ -348,16 +528,15 @@ int test_block_request_combinations() {
     return luna_failed_tests;
 }
 
-int test_youtube_ads() {
-    int luna_failed_tests = 0;
+size_t test_youtube_ads() {
+    size_t luna_failed_tests = 0;
 
     const char* lists[] = {
         "tests/easylist.txt", "tests/easyprivacy.txt", "tests/uboFilters.txt",
         "tests/yt-shorts.txt", "tests/unbreak.txt", "tests/quick-fixes.txt"
     };
 
-    // Test 1: Known YouTube ad/service URLs that MUST be blocked
-    printf("\n--- YouTube ad URLs (should block) ---\n");
+    printf("\n  " ANSI_YELLOW "▸ YouTube ad URLs (should block)" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used_yt1"));
         for (auto f : lists) ab.parse_list_file(f);
@@ -374,8 +553,7 @@ int test_youtube_ads() {
         LUNA_TEST_ASSERT(ab.block_request("https://pubads.g.doubleclick.net/gampad/ads") == true);
     }
 
-    // Test 2: Known YouTube content URLs that MUST NOT be blocked
-    printf("\n--- YouTube content URLs (should NOT block) ---\n");
+    printf("\n  " ANSI_YELLOW "▸ YouTube content URLs (should NOT block)" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used_yt2"));
         for (auto f : lists) ab.parse_list_file(f);
@@ -389,8 +567,7 @@ int test_youtube_ads() {
         LUNA_TEST_ASSERT(ab.block_request("https://yt3.ggpht.com/ytc/xxx") == false);
     }
 
-    // Test 3: Resource type + document domain variations on YouTube ads
-    printf("\n--- YouTube ad URLs with resource type and document domain ---\n");
+    printf("\n  " ANSI_YELLOW "▸ YouTube ad URLs with resource type and document domain" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used_yt3"));
         for (auto f : lists) ab.parse_list_file(f);
@@ -403,8 +580,7 @@ int test_youtube_ads() {
         LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/get_video_info?video_id=xxx", 0, "www.youtube.com") == false);
     }
 
-    // Test 4: googlevideo.com CDN ad requests
-    printf("\n--- googlevideo.com ad requests ---\n");
+    printf("\n  " ANSI_YELLOW "▸ googlevideo.com ad requests" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used_yt4"));
         for (auto f : lists) ab.parse_list_file(f);
@@ -415,8 +591,7 @@ int test_youtube_ads() {
         LUNA_TEST_ASSERT(ab.block_request("https://r1---sn-abc.googlevideo.com/initplayback?source=youtube&c=TVHTML5", 1 << 5, "www.youtube.com") == false);
     }
 
-    // Test 5: Exception rules — timedtext_editor (exception is commented out in uboFilters.txt)
-    printf("\n--- YouTube exception rules ---\n");
+    printf("\n  " ANSI_YELLOW "▸ YouTube exception rules" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used_yt5"));
         for (auto f : lists) ab.parse_list_file(f);
@@ -425,8 +600,7 @@ int test_youtube_ads() {
         LUNA_TEST_ASSERT(ab.block_request("https://www.youtube.com/get_video_info?video_id=xxx&adunit=yyy&timedtext_editor=1", 0, "www.youtube.com") == true);
     }
 
-    // Test 6: Content hiding rules — YouTube domain
-    printf("\n--- YouTube content hiding rules ---\n");
+    printf("\n  " ANSI_YELLOW "▸ YouTube content hiding rules" ANSI_RESET "\n");
     {
         LunaAdBlocker ab(std::filesystem::path("not_used_yt6"));
         for (auto f : lists) ab.parse_list_file(f);
@@ -452,64 +626,9 @@ int test_youtube_ads() {
     return luna_failed_tests;
 }
 
-int main() {
-    printf("=== Luna AdBlocker Test Suite ===\n");
-    int ret = run_tests();
-    printf(ret == 0 ? "\nAll tests passed!\n" : "\nSome tests failed!\n");
-    return ret;
-}
-
-int test_str2u64() {
-    int luna_failed_tests = 0;
-    printf("Testing str2u64...\n");
-    LUNA_TEST_ASSERT(str2u64("0") == 0);
-    LUNA_TEST_ASSERT(str2u64("12345") == 12345);
-    LUNA_TEST_ASSERT(str2u64("18446744073709551615") == UINT64_MAX);
-    return luna_failed_tests;
-}
-
-int test_cache() {
-    int luna_failed_tests = 0;
-    LunaAdBlocker ab(std::filesystem::path("not_used"));
-    ab.parse_list_file("tests/easylist.txt");
-    ab.clear_cache();
-
-    // Test 1: Cache miss on first request
-    printf("Test 1: Cache miss on first request...\n");
-    LUNA_TEST_ASSERT(ab.cache_size() == 0);
-    bool result1 = ab.block_request("https://googleads.g.doubleclick.net/pagead/id");
-    LUNA_TEST_ASSERT(result1 == true);
-    LUNA_TEST_ASSERT(ab.cache_size() == 1);
-
-    // Test 2: Cache hit on second request
-    printf("Test 2: Cache hit on second request...\n");
-    bool result2 = ab.block_request("https://googleads.g.doubleclick.net/pagead/id");
-    LUNA_TEST_ASSERT(result2 == true);
-    LUNA_TEST_ASSERT(ab.cache_size() == 1);  // Still 1, not 2
-
-    // Test 3: Different URL should miss cache
-    printf("Test 3: Different URL should miss cache...\n");
-    bool result3 = ab.block_request("https://thatsillyman.win");
-    LUNA_TEST_ASSERT(result3 == false);
-    LUNA_TEST_ASSERT(ab.cache_size() == 2);
-
-    // Test 4: Test cache with resource type and document domain
-    printf("Test 4: Cache with resource type and document domain...\n");
-    bool result4 = ab.block_request("https://googleads.g.doubleclick.net/pagead/id", 1 << 0, "example.com");
-    LUNA_TEST_ASSERT(result4 == true);
-    LUNA_TEST_ASSERT(ab.cache_size() == 3);  // Different key due to different params
-
-    // Test 5: Flush should clear cache and stop thread
-    printf("Test 5: Flush clears cache and stops thread...\n");
-    ab.flush();
-    LUNA_TEST_ASSERT(ab.cache_size() == 0);
-
-    return luna_failed_tests;
-}
-
 #if __has_include("real_network_ads.h")
-int test_real_network_ads() {
-    int luna_failed_tests = 0;
+size_t test_real_network_ads() {
+    size_t luna_failed_tests = 0;
     const char* lists[] = {
         "tests/easylist.txt", "tests/easyprivacy.txt", "tests/uboFilters.txt",
         "tests/yt-shorts.txt", "tests/unbreak.txt", "tests/quick-fixes.txt",
@@ -521,32 +640,32 @@ int test_real_network_ads() {
 
     const char *current_cat_id = "";
     const char *current_svc = "";
-    int cat_total = 0, cat_failed = 0;
-    int svc_total = 0, svc_failed = 0;
+    size_t cat_total = 0, cat_failed = 0;
+    size_t svc_total = 0, svc_failed = 0;
 
-    for (int i = 0; AD_TESTS[i].url != nullptr; i++) {
+    for (size_t i = 0; AD_TESTS[i].url != nullptr; i++) {
         const auto &e = AD_TESTS[i];
 
         if (strcmp(e.category_id, current_cat_id) != 0) {
-            if (i > 0) printf("  category: %d/%d passed\n", cat_total - cat_failed, cat_total);
+            if (i > 0) printf("  category: %zu/%zu passed\n", cat_total - cat_failed, cat_total);
             current_cat_id = e.category_id;
             current_svc = "";
             cat_total = 0; cat_failed = 0;
-            printf("\n>>> [%s] %s\n", e.category_id, e.category_name);
+            printf("\n" ANSI_MAGENTA ">>> [%s] %s" ANSI_RESET "\n", e.category_id, e.category_name);
         }
 
         if (strcmp(e.service, current_svc) != 0) {
-            if (svc_total > 0) printf("    service: %d/%d passed\n", svc_total - svc_failed, svc_total);
+            if (svc_total > 0) printf("    service: %zu/%zu passed\n", svc_total - svc_failed, svc_total);
             current_svc = e.service;
             svc_total = 0; svc_failed = 0;
-            printf("\n  --- %s ---\n", e.service);
+            printf("\n  " ANSI_CYAN "--- %s ---" ANSI_RESET "\n", e.service);
         }
 
         bool blocked = ab.block_request(e.url);
         if (blocked) {
-            printf("    [PASS] %s\n", e.url);
+            printf("    " ANSI_GREEN "[PASS]" ANSI_RESET " %s\n", e.url);
         } else {
-            printf("    [FAIL] %s  <-- NOT BLOCKED\n", e.url);
+            printf("    " ANSI_RED "[FAIL]" ANSI_RESET " %s  " ANSI_RED "<-- NOT BLOCKED" ANSI_RESET "\n", e.url);
             luna_failed_tests++;
             cat_failed++;
             svc_failed++;
@@ -555,206 +674,101 @@ int test_real_network_ads() {
         svc_total++;
     }
 
-    if (svc_total > 0) printf("    service: %d/%d passed\n", svc_total - svc_failed, svc_total);
-    if (cat_total > 0) printf("  category: %d/%d passed\n", cat_total - cat_failed, cat_total);
+    if (svc_total > 0) printf("    service: %zu/%zu passed\n", svc_total - svc_failed, svc_total);
+    if (cat_total > 0) printf("  category: %zu/%zu passed\n", cat_total - cat_failed, cat_total);
 
     return luna_failed_tests;
 }
 #endif
 
-int test_get_hiding_rules_for_domain() {
-    int luna_failed_tests = 0;
+static const TestCase tests[] = {
+    {"str2u64",              test_str2u64,              "str2u64 conversions",                    false},
+    {"easylist_samples",     test_easylist_samples,     "Real easylist samples",                 false},
+    {"cache",                test_cache,                "Cache functionality",                    false},
+    {"hiding_rules",         test_get_hiding_rules_for_domain, "Content hiding rules for domains", false},
+    {"load_all_lists",       test_load_all_filter_lists,"All filter list counts and blocking",    false},
+    {"block_request_combos", test_block_request_combinations, "block_request argument combos",    false},
+    {"youtube_ads",          test_youtube_ads,          "YouTube ad blocking",                    true },
+#if __has_include("real_network_ads.h")
+    {"real_network_ads",     test_real_network_ads,     "Real network ad URLs",                   true },
+#endif
+};
 
-    // Test 1: No content rules returns empty array
-    printf("Test 1: No content rules returns empty array...\n");
-    {
-        LunaAdBlocker ab(std::filesystem::path("not_used1"));
-        std::string r = ab.get_hiding_rules_for_domain("example.com");
-        LUNA_TEST_ASSERT(r == "[]");
+int main(int argc, char** argv) {
+    auto start = std::chrono::steady_clock::now();
+
+    printf(ANSI_BOLD "\n  luna test suite\n" ANSI_RESET);
+    printf(ANSI_BOLD "  %s" ANSI_RESET "\n\n", "════════════════════════════════════════");
+
+    const size_t num_tests = sizeof(tests) / sizeof(tests[0]);
+    size_t total_failed = 0;
+    size_t total_assertions = 0;
+    size_t total_passed = 0;
+    size_t tests_run = 0;
+
+    auto run_test = [&](const TestCase& t) {
+        luna_test_stats = {0, 0};
+        size_t failed = t.func();
+        size_t passed = luna_test_stats.total - luna_test_stats.failed;
+        printf("\n  " ANSI_BOLD "%s" ANSI_RESET "\n", "────────────────────────────────────");
+        if (failed == 0) {
+            printf("  " ANSI_GREEN "✓ %s:" ANSI_RESET " %zu passed\n", t.desc, passed);
+        } else {
+            printf("  " ANSI_RED "✗ %s:" ANSI_RESET " %zu/%zu passed, %zu failed\n", t.desc, passed, luna_test_stats.total, failed);
+        }
+        total_failed += failed;
+        total_assertions += luna_test_stats.total;
+        total_passed += passed;
+        tests_run++;
+    };
+
+    if (argc > 1) {
+        if (strcmp(argv[1], "--list") == 0) {
+            printf("  Available tests:\n");
+            for (size_t i = 0; i < num_tests; i++) {
+                printf("    " ANSI_CYAN "%s" ANSI_RESET "  - %s%s\n",
+                       tests[i].name, tests[i].desc,
+                       tests[i].skip_all ? " (opt-in)" : "");
+            }
+            return 0;
+        }
+        const char* filter = argv[1];
+        bool found = false;
+        for (size_t i = 0; i < num_tests; i++) {
+            if (strcmp(tests[i].name, filter) == 0) {
+                run_test(tests[i]);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            printf(ANSI_YELLOW "  Unknown test \"%s\". Available tests:" ANSI_RESET "\n", filter);
+            for (size_t i = 0; i < num_tests; i++) {
+                printf("    " ANSI_CYAN "%s" ANSI_RESET "  - %s\n", tests[i].name, tests[i].desc);
+            }
+            return 1;
+        }
+    } else {
+        for (size_t i = 0; i < num_tests; i++) {
+            if (!tests[i].skip_all) {
+                run_test(tests[i]);
+                printf("\n");
+            }
+        }
     }
 
-    // Test 2: Global rules apply to any domain
-    printf("Test 2: Global rules apply to any domain...\n");
-    {
-        LunaAdBlocker ab(std::filesystem::path("not_used2"));
-        LunaAdBlockerRule rule;
-        rule.type = LunaAdBlockerRuleType::ContentHideRule;
-        rule.selector = ".ad";
-        ab.content_rules.push_back(std::move(rule));
-        std::string r1 = ab.get_hiding_rules_for_domain("example.com");
-        LUNA_TEST_ASSERT(r1.find(".ad") != std::string::npos);
-        std::string r2 = ab.get_hiding_rules_for_domain("other.com");
-        LUNA_TEST_ASSERT(r2.find(".ad") != std::string::npos);
+    auto end = std::chrono::steady_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    printf(ANSI_BOLD "  %s" ANSI_RESET "\n", "════════════════════════════════════════");
+    if (total_failed == 0) {
+        printf("  " ANSI_GREEN ANSI_BOLD "  ✓ ALL TESTS PASSED" ANSI_RESET "\n");
+    } else {
+        printf("  " ANSI_RED ANSI_BOLD "  ✗ %zu TEST(S) FAILED" ANSI_RESET "\n", total_failed);
     }
+    printf("  %zu test(s), %zu assertion(s), %zu failed, %zu passed\n",
+           tests_run, total_assertions, total_failed, total_passed);
+    printf("  completed in %lldms\n" ANSI_RESET, (long long)ms);
 
-    // Test 3: Domain-specific rules only for matching domain
-    printf("Test 3: Domain-specific rules only for matching domain...\n");
-    {
-        LunaAdBlocker ab(std::filesystem::path("not_used3"));
-        LunaAdBlockerRule rule;
-        rule.type = LunaAdBlockerRuleType::ContentHideRule;
-        rule.selector = "#ad-banner";
-        rule.options.domains.push_back("example.com");
-        ab.content_rules.push_back(std::move(rule));
-        std::string r1 = ab.get_hiding_rules_for_domain("example.com");
-        LUNA_TEST_ASSERT(r1.find("#ad-banner") != std::string::npos);
-        std::string r2 = ab.get_hiding_rules_for_domain("other.com");
-        LUNA_TEST_ASSERT(r2 == "[]");
-    }
-
-    // Test 4: Subdomain matches parent domain rule
-    printf("Test 4: Subdomain matches parent domain rule...\n");
-    {
-        LunaAdBlocker ab(std::filesystem::path("not_used4"));
-        LunaAdBlockerRule rule;
-        rule.type = LunaAdBlockerRuleType::ContentHideRule;
-        rule.selector = ".subdomain-ad";
-        rule.options.domains.push_back("example.com");
-        ab.content_rules.push_back(std::move(rule));
-        std::string r1 = ab.get_hiding_rules_for_domain("sub.example.com");
-        LUNA_TEST_ASSERT(r1.find(".subdomain-ad") != std::string::npos);
-        std::string r2 = ab.get_hiding_rules_for_domain("example.org");
-        LUNA_TEST_ASSERT(r2 == "[]");
-    }
-
-    // Test 5: Exclude domains work correctly
-    printf("Test 5: Exclude domains work correctly...\n");
-    {
-        LunaAdBlocker ab(std::filesystem::path("not_used5"));
-        LunaAdBlockerRule rule;
-        rule.type = LunaAdBlockerRuleType::ContentHideRule;
-        rule.selector = "#excluded-ad";
-        rule.options.domains.push_back("example.com");
-        rule.options.exclude_domains.push_back("mail.example.com");
-        ab.content_rules.push_back(std::move(rule));
-        std::string r1 = ab.get_hiding_rules_for_domain("example.com");
-        LUNA_TEST_ASSERT(r1.find("#excluded-ad") != std::string::npos);
-        std::string r2 = ab.get_hiding_rules_for_domain("mail.example.com");
-        LUNA_TEST_ASSERT(r2 == "[]");
-    }
-
-    // Test 6: Empty selector is skipped
-    printf("Test 6: Empty selector is skipped...\n");
-    {
-        LunaAdBlocker ab(std::filesystem::path("not_used6"));
-        LunaAdBlockerRule rule1;
-        rule1.type = LunaAdBlockerRuleType::ContentHideRule;
-        rule1.selector = "";
-        ab.content_rules.push_back(std::move(rule1));
-        LunaAdBlockerRule rule2;
-        rule2.type = LunaAdBlockerRuleType::ContentHideRule;
-        rule2.selector = ".real-ad";
-        ab.content_rules.push_back(std::move(rule2));
-        std::string r = ab.get_hiding_rules_for_domain("example.com");
-        LUNA_TEST_ASSERT(r.find(".real-ad") != std::string::npos);
-        LUNA_TEST_ASSERT(r.find("\"selector\":\"\"") == std::string::npos);
-    }
-
-    // Test 7: JSON format is valid
-    printf("Test 7: JSON format is valid...\n");
-    {
-        LunaAdBlocker ab(std::filesystem::path("not_used7"));
-        LunaAdBlockerRule rule1;
-        rule1.type = LunaAdBlockerRuleType::ContentHideRule;
-        rule1.selector = "#ad1";
-        ab.content_rules.push_back(std::move(rule1));
-        LunaAdBlockerRule rule2;
-        rule2.type = LunaAdBlockerRuleType::ContentHideRule;
-        rule2.selector = ".ad2";
-        ab.content_rules.push_back(std::move(rule2));
-        std::string r = ab.get_hiding_rules_for_domain("example.com");
-        LUNA_TEST_ASSERT(r[0] == '[');
-        LUNA_TEST_ASSERT(r.back() == ']');
-        LUNA_TEST_ASSERT(r.find("{\"selector\":\"#ad1\"}") != std::string::npos);
-        LUNA_TEST_ASSERT(r.find("{\"selector\":\".ad2\"}") != std::string::npos);
-    }
-
-    // Test 8: From easylist file — global rules present
-    printf("Test 8: From easylist file — global rules present...\n");
-    {
-        LunaAdBlocker ab(std::filesystem::path("not_used8"));
-        ab.parse_list_file("tests/easylist.txt");
-        std::string r = ab.get_hiding_rules_for_domain("example.com");
-        LUNA_TEST_ASSERT(!r.empty());
-        LUNA_TEST_ASSERT(r[0] == '[');
-        LUNA_TEST_ASSERT(r.back() == ']');
-    }
-
-    // Test 9: easylist — youtube.com gets youtube-specific rules, NOT other domains' rules
-    printf("Test 9: easylist — youtube domain filtering...\n");
-    {
-        LunaAdBlocker ab(std::filesystem::path("not_used9"));
-        ab.parse_list_file("tests/easylist.txt");
-
-        std::string r_youtube = ab.get_hiding_rules_for_domain("youtube.com");
-        LUNA_TEST_ASSERT(!r_youtube.empty());
-        LUNA_TEST_ASSERT(r_youtube.find("#shopping-timely-shelf") != std::string::npos);
-        LUNA_TEST_ASSERT(r_youtube.find("#sticker-layer") != std::string::npos);
-        LUNA_TEST_ASSERT(r_youtube.find("ytd-rich-item-renderer:has(> #content > ytd-ad-slot-renderer)") != std::string::npos);
-
-        // Must NOT include reddit-specific rules
-        LUNA_TEST_ASSERT(r_youtube.find("shreddit-ad-post") == std::string::npos);
-        LUNA_TEST_ASSERT(r_youtube.find("reddit.com") == std::string::npos);
-
-        // Must NOT include multi-domain rules for other sites like moviekhhd.biz
-        LUNA_TEST_ASSERT(r_youtube.find("moviekhhd") == std::string::npos);
-
-        // Result should not contain other domains' specific selectors
-        LUNA_TEST_ASSERT(r_youtube.find("reddit") == std::string::npos);
-        LUNA_TEST_ASSERT(r_youtube.find("moviekhhd") == std::string::npos);
-    }
-
-    // Test 10: easylist — reddit.com gets reddit rules, NOT youtube rules
-    printf("Test 10: easylist — reddit domain filtering...\n");
-    {
-        LunaAdBlocker ab(std::filesystem::path("not_used10"));
-        ab.parse_list_file("tests/easylist.txt");
-
-        std::string r_reddit = ab.get_hiding_rules_for_domain("reddit.com");
-        LUNA_TEST_ASSERT(!r_reddit.empty());
-        LUNA_TEST_ASSERT(r_reddit.find("shreddit-ad-post") != std::string::npos);
-        LUNA_TEST_ASSERT(r_reddit.find("#shopping-timely-shelf") == std::string::npos);
-        LUNA_TEST_ASSERT(r_reddit.find("#sticker-layer") == std::string::npos);
-        // Check selectors with embedded quotes (escaped in JSON output)
-        LUNA_TEST_ASSERT(r_reddit.find("data-before-content") != std::string::npos);
-        LUNA_TEST_ASSERT(r_reddit.find("data-faceplate-tracking-context") != std::string::npos);
-    }
-
-    // Test 11: Multi-domain content rule parsing (comma-separated domains)
-    printf("Test 11: Multi-domain content rule parsing...\n");
-    {
-        LunaAdBlocker ab(std::filesystem::path("not_used11"));
-        // Simulate parsing a multi-domain content rule
-        auto rule = LunaAdBlockerRule::parse("domain1.com,domain2.com##.multi-ad");
-        LUNA_TEST_ASSERT(rule.type == LunaAdBlockerRuleType::ContentHideRule);
-        LUNA_TEST_ASSERT(rule.selector == ".multi-ad");
-        LUNA_TEST_ASSERT(rule.options.domains.size() == 2);
-        LUNA_TEST_ASSERT(rule.options.domains[0] == "domain1.com");
-        LUNA_TEST_ASSERT(rule.options.domains[1] == "domain2.com");
-
-        ab.content_rules.push_back(std::move(rule));
-
-        std::string r1 = ab.get_hiding_rules_for_domain("domain1.com");
-        LUNA_TEST_ASSERT(r1.find(".multi-ad") != std::string::npos);
-
-        std::string r2 = ab.get_hiding_rules_for_domain("domain2.com");
-        LUNA_TEST_ASSERT(r2.find(".multi-ad") != std::string::npos);
-
-        // Should NOT include it for other domains
-        std::string r3 = ab.get_hiding_rules_for_domain("other.com");
-        LUNA_TEST_ASSERT(r3 == "[]");
-    }
-
-    // Test 12: Parse real multi-domain content rule from easylist
-    printf("Test 12: Real multi-domain content rule from easylist...\n");
-    {
-        auto rule = LunaAdBlockerRule::parse("calculatorsoup.com,thetvdb.com###Bottom");
-        LUNA_TEST_ASSERT(rule.type == LunaAdBlockerRuleType::ContentHideRule);
-        LUNA_TEST_ASSERT(rule.selector == "#Bottom");
-        LUNA_TEST_ASSERT(rule.options.domains.size() == 2);
-        LUNA_TEST_ASSERT(rule.options.domains[0] == "calculatorsoup.com");
-        LUNA_TEST_ASSERT(rule.options.domains[1] == "thetvdb.com");
-    }
-
-    return luna_failed_tests;
+    return (int)total_failed;
 }
