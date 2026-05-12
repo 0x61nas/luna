@@ -325,6 +325,7 @@ struct StatusBar: QWidget {
     QLabel *txt;
     QLabel *url;
     QLabel *position; // [top] -> [100%]
+    QLabel *zoom;     // 100%
     QLabel *tab_index; // the selected tab index from the total [2/3]
     QLabel *load_time;
     QLabel *keystr;
@@ -345,6 +346,10 @@ struct StatusBar: QWidget {
         this->position = new QLabel("[top]", this);
         this->position->setTextFormat(Qt::PlainText);
         this->position->setStyleSheet("color: #ebdbb2; padding: 2px;");
+
+        this->zoom = new QLabel("100%", this);
+        this->zoom->setTextFormat(Qt::PlainText);
+        this->zoom->setStyleSheet("color: #ebdbb2; padding: 2px;");
 
         this->tab_index = new QLabel("[1/1]", this);
         this->tab_index->setTextFormat(Qt::PlainText);
@@ -369,6 +374,7 @@ struct StatusBar: QWidget {
         layout->addWidget(this->url, 1);
         layout->addWidget(this->progress);
         layout->addWidget(this->position);
+        layout->addWidget(this->zoom);
         layout->addWidget(this->tab_index);
         layout->addWidget(this->load_time);
         layout->addWidget(this->keystr);
@@ -403,6 +409,10 @@ struct StatusBar: QWidget {
 
     void set_position(const QString &text) {
         this->position->setText(text);
+    }
+
+    void set_zoom(const qreal factor) {
+        this->zoom->setText(QString("%1%").arg(qRound(factor * 100.0)));
     }
 
     void set_load_time(const uint64_t elapsed) {
@@ -461,6 +471,7 @@ struct TabBody: QWidget {
         QPointF scroll_position;
         QString search_term;
         QString title;
+        qreal zoom_factor;
     };
     TabBodyStateTag tag;
     union TabBodyStateValue {
@@ -571,6 +582,7 @@ struct TabRestoreState {
     QPointF scroll_position;
     QString search_term;
     size_t tab_index;
+    qreal zoom_factor;
 
     bool is_valid() const {
         return !url.isEmpty();
@@ -2155,6 +2167,7 @@ struct LunaBrowser: QMainWindow {
                 state.scroll_position = v->page()->scrollPosition();
                 state.tab_index = idx;
                 state.search_term = tab_body->search_term;
+                state.zoom_factor = v->page()->zoomFactor();
                 if (state.is_valid()) {
                     if (this->restore_count < TAB_RESTORE_MAX_COUNT) {
                         // Shift all existing entries right to make room at index 0
@@ -2311,6 +2324,16 @@ struct LunaBrowser: QMainWindow {
                         this->error_timer->stop();
                     }
                 } break;
+                case Qt::Key_Equal: {
+                    const auto z = std::min(5.0, v->page()->zoomFactor() + 0.25);
+                    v->page()->setZoomFactor(z);
+                    this->status_bar->set_zoom(z);
+                } break;
+                case Qt::Key_Minus: {
+                    const auto z = std::max(0.25, v->page()->zoomFactor() - 0.25);
+                    v->page()->setZoomFactor(z);
+                    this->status_bar->set_zoom(z);
+                } break;
             }
             return true; // we handled that key event
         } else {
@@ -2461,8 +2484,10 @@ struct LunaBrowser: QMainWindow {
         const QString url = state.url;
         auto *tab_body = this->new_tab(this->profile.web_engine_profile, url.toStdString().c_str(), false);
         if (auto *v = tab_body->active_veiw()) {
-            // Restore scroll position and search term after page loads
+            // Restore zoom, scroll position, and search term after page loads
             QObject::connect(v, &QWebEngineView::loadFinished, this, [v, state, tab_body]() {
+                // Restore zoom factor
+                v->page()->setZoomFactor(state.zoom_factor);
                 // Restore scroll position
                 v->page()->runJavaScript(QString("window.scrollTo(%1, %2);")
                     .arg(state.scroll_position.x())
@@ -2517,11 +2542,13 @@ struct LunaBrowser: QMainWindow {
                 QString url = v->url().toString();
                 if (url.isEmpty() || url == LUNA_NEW_TAB_URL) continue;
                 QPointF scroll_pos = v->page()->scrollPosition();
+                const auto zoom_factor = v->zoomFactor();
                 QString search = tab_body->search_term;
                 QString title = v->title();
                 file << url.toStdString() << ","
                      << scroll_pos.x() << ","
                      << scroll_pos.y() << ","
+                     << zoom_factor << ","
                      << search.toStdString() << ","
                      << title.toStdString() << ",s\n";
             } else if (tab_body->tag == SplitedTagBodyState && tab_body->val.splitter) {
@@ -2530,13 +2557,15 @@ struct LunaBrowser: QMainWindow {
                     auto *sv = qobject_cast<QWebEngineView*>(tab_body->val.splitter->widget(j));
                     if (!sv) continue;
                     QString url = sv->url().toString();
-                    if (url.isEmpty() || url == LUNA_NEW_TAB_URL) continue;
+                    // if (url.isEmpty() || url == LUNA_NEW_TAB_URL) continue;
                     QPointF scroll_pos = sv->page()->scrollPosition();
+                    const auto zoom_factor = sv->zoomFactor();
                     QString search = (j == 0) ? tab_body->search_term : QString();
                     QString title = sv->title();
                     file << url.toStdString() << ","
                          << scroll_pos.x() << ","
                          << scroll_pos.y() << ","
+                         << zoom_factor << ","
                          << search.toStdString() << ","
                          << title.toStdString() << ","
                          << split_state.toStdString() << "\n";
@@ -2624,19 +2653,16 @@ struct LunaBrowser: QMainWindow {
             }
             parts.push_back(line.substr(pos));
 
-            if (parts.empty() || parts[0].empty()) continue;
+            if (parts.empty() || parts[0].empty()) continue; // a broken entry
 
-            SessionViewEntry entry;
+            TabRestoreState entry;
             entry.url = QString::fromStdString(parts[0]);
-            if (parts.size() >= 2) entry.scroll_pos.setX(std::stod(parts[1]));
-            if (parts.size() >= 3) entry.scroll_pos.setY(std::stod(parts[2]));
-            if (parts.size() >= 4) entry.search_term = QString::fromStdString(parts[3]);
-            if (parts.size() >= 6) {
-                entry.title = QString::fromStdString(parts[4]);
-                entry.split_state = QString::fromStdString(parts[5]);
-            } else if (parts.size() >= 5) {
-                entry.split_state = QString::fromStdString(parts[4]);
-            }
+            if (parts.size() >= 2) entry.scroll_position.setX(std::stod(parts[1]));
+            if (parts.size() >= 3) entry.scroll_position.setY(std::stod(parts[2]));
+            if (parts.size() >= 4) entry.zoom_factor = std::stod(parts[3]);
+            if (parts.size() >= 5) entry.search_term = QString::fromStdString(parts[4]);
+            if (parts.size() >= 6) entry.title = QString::fromStdString(parts[5]);
+            if (parts.size() >= 7) entry.split_state = QString::fromStdString(parts[6]);
             entries.push_back(std::move(entry));
         }
         file.close();
@@ -2656,6 +2682,7 @@ struct LunaBrowser: QMainWindow {
         while (view_idx < entries.size()) {
             bool is_active = (tab_idx == selected_tab_idx);
             auto &entry = entries[view_idx];
+            auto zoom_factor = entry.zoom_factor;
             QString split_state = entry.split_state.isEmpty() ? QString("s") : entry.split_state;
 
             if (split_state == "s") {
@@ -2667,9 +2694,9 @@ struct LunaBrowser: QMainWindow {
                 }
                 if (auto *v = tab_body->active_veiw()) {
                     if (is_active) {
-                        QPointF scroll_pos = entry.scroll_pos;
+                        QPointF scroll_pos = entry.scroll_position;
                         QString search_term = entry.search_term;
-                        QObject::connect(v, &QWebEngineView::loadFinished, this, [v, scroll_pos, search_term, tab_body]() {
+                        QObject::connect(v, &QWebEngineView::loadFinished, this, [v, scroll_pos, search_term, tab_body, zoom_factor]() {
                             if (scroll_pos.x() != 0 || scroll_pos.y() != 0) {
                                 v->page()->runJavaScript(QString("window.scrollTo(%1, %2);")
                                     .arg(scroll_pos.x())
@@ -2679,9 +2706,10 @@ struct LunaBrowser: QMainWindow {
                                 tab_body->search_term = search_term;
                                 v->page()->findText(search_term, QWebEnginePage::FindFlags(), [](const QWebEngineFindTextResult &) {});
                             }
+                            v->setZoomFactor(zoom_factor);
                         });
                     } else {
-                        tab_body->pending_views.push_back({entry.url, entry.scroll_pos, entry.search_term, entry.title});
+                        tab_body->pending_views.push_back({entry.url, entry.scroll_position, entry.search_term, entry.title});
                     }
                 }
                 view_idx++;
@@ -2741,13 +2769,15 @@ struct LunaBrowser: QMainWindow {
                 if (v2) connect_view(v2);
 
                 if (is_active) {
-                    auto load_view = [this](QWebEngineView *sv, const SessionViewEntry &e) {
+                    auto load_view = [this](QWebEngineView *sv, const TabRestoreState &e) {
                         sv->load(QUrl(e.url));
-                        QPointF sp = e.scroll_pos;
-                        QObject::connect(sv, &QWebEngineView::loadFinished, this, [sv, sp]() {
+                        QPointF sp = e.scroll_position;
+                        const auto zoom_factor = e.zoom_factor;
+                        QObject::connect(sv, &QWebEngineView::loadFinished, this, [sv, sp, zoom_factor]() {
                             if (sp.x() != 0 || sp.y() != 0) {
                                 sv->page()->runJavaScript(QString("window.scrollTo(%1, %2);").arg(sp.x()).arg(sp.y()));
                             }
+                            sv->setZoomFactor(zoom_factor);
                         });
                     };
                     load_view(v1, entry);
@@ -2755,10 +2785,10 @@ struct LunaBrowser: QMainWindow {
                         load_view(v2, entries[view_idx + 1]);
                     }
                 } else {
-                    tab_body->pending_views.push_back({entry.url, entry.scroll_pos, entry.search_term, entry.title});
+                    tab_body->pending_views.push_back({entry.url, entry.scroll_position, entry.search_term, entry.title});
                     if (v2 && view_idx + 1 < entries.size()) {
                         auto &e2 = entries[view_idx + 1];
-                        tab_body->pending_views.push_back({e2.url, e2.scroll_pos, e2.search_term, e2.title});
+                        tab_body->pending_views.push_back({e2.url, e2.scroll_position, e2.search_term, e2.title});
                     }
                 }
 
@@ -2783,13 +2813,15 @@ struct LunaBrowser: QMainWindow {
             sv->load(QUrl(pv.url));
             const QPointF sp = pv.scroll_position;
             const QString st = pv.search_term;
-            QObject::connect(sv, &QWebEngineView::loadFinished, this, [sv, sp, st]() {
+            const auto zoom_factor = pv.zoom_factor;
+            QObject::connect(sv, &QWebEngineView::loadFinished, this, [sv, sp, st, zoom_factor]() {
                 if (sp.x() != 0 || sp.y() != 0) {
                     sv->page()->runJavaScript(QString("window.scrollTo(%1, %2);").arg(sp.x()).arg(sp.y()));
                 }
                 if (!st.isEmpty()) {
                     sv->page()->findText(st, QWebEnginePage::FindFlags(), [](const QWebEngineFindTextResult &) {});
                 }
+                sv->setZoomFactor(zoom_factor);
             });
         };
 
